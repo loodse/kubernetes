@@ -33,8 +33,6 @@ else
     echo "k8s version is set to: ${K8S_VERSION}"
 fi
 
-
-
 # Run as root
 if [ "$(id -u)" != "0" ]; then
     echo >&2 "Please run as root"
@@ -137,7 +135,14 @@ start_k8s() {
             DOCKER_CONF="/etc/default/docker"
             echo "DOCKER_OPTS=\"\$DOCKER_OPTS --mtu=${FLANNEL_MTU} --bip=${FLANNEL_SUBNET}\"" | sudo tee -a ${DOCKER_CONF}
             ifconfig docker0 down
-            apt-get install bridge-utils && brctl delbr docker0 && service docker restart
+            apt-get install bridge-utils
+            brctl delbr docker0
+            service docker stop
+            while [ `ps aux | grep /usr/bin/docker | grep -v grep | wc -l` -gt 0 ]; do
+                echo "Waiting for docker to terminate"
+                sleep 1
+            done
+            service docker start
             ;;
         *)
             echo "Unsupported operations system ${lsb_dist}"
@@ -149,6 +154,7 @@ start_k8s() {
     sleep 5
     
     # Start kubelet & proxy in container
+    # TODO: Use secure port for communication
     docker run \
         --net=host \
         --pid=host \
@@ -157,15 +163,16 @@ start_k8s() {
         -d \
         -v /sys:/sys:ro \
         -v /var/run:/var/run:rw  \
+        -v /:/rootfs:ro \
         -v /dev:/dev \
         -v /var/lib/docker/:/var/lib/docker:rw \
         -v /var/lib/kubelet/:/var/lib/kubelet:rw \
         gcr.io/google_containers/hyperkube:v${K8S_VERSION} \
         /hyperkube kubelet --api-servers=http://${MASTER_IP}:8080 \
         --v=2 --address=0.0.0.0 --enable-server \
-        --hostname-override=$(hostname -i) \
         --cluster-dns=10.0.0.10 \
-        --cluster-domain=cluster.local
+        --cluster-domain=cluster.local \
+        --containerized
     
     docker run \
         -d \

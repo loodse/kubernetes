@@ -53,8 +53,8 @@ func NewResourceQuota(client client.Interface) admission.Interface {
 		ListFunc: func() (runtime.Object, error) {
 			return client.ResourceQuotas(api.NamespaceAll).List(labels.Everything(), fields.Everything())
 		},
-		WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-			return client.ResourceQuotas(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), resourceVersion)
+		WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+			return client.ResourceQuotas(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), options)
 		},
 	}
 	indexer, reflector := cache.NewNamespaceKeyedIndexerAndReflector(lw, &api.ResourceQuota{}, 0)

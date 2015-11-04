@@ -63,9 +63,10 @@ func (a latencySlice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a latencySlice) Less(i, j int) bool { return a[i].Latency < a[j].Latency }
 
 func extractLatencyMetrics(latencies []podLatencyData) LatencyMetric {
-	perc50 := latencies[len(latencies)/2].Latency
-	perc90 := latencies[(len(latencies)*9)/10].Latency
-	perc99 := latencies[(len(latencies)*99)/100].Latency
+	length := len(latencies)
+	perc50 := latencies[int(math.Ceil(float64(length*50)/100))-1].Latency
+	perc90 := latencies[int(math.Ceil(float64(length*90)/100))-1].Latency
+	perc99 := latencies[int(math.Ceil(float64(length*99)/100))-1].Latency
 	return LatencyMetric{Perc50: perc50, Perc90: perc90, Perc99: perc99}
 }
 
@@ -80,10 +81,40 @@ var _ = Describe("Density", func() {
 	var additionalPodsPrefix string
 	var ns string
 	var uuid string
-	framework := Framework{BaseName: "density", NamespaceDeletionTimeout: time.Hour}
+
+	// Gathers data prior to framework namespace teardown
+	AfterEach(func() {
+		// Remove any remaining pods from this test if the
+		// replication controller still exists and the replica count
+		// isn't 0.  This means the controller wasn't cleaned up
+		// during the test so clean it up here. We want to do it separately
+		// to not cause a timeout on Namespace removal.
+		rc, err := c.ReplicationControllers(ns).Get(RCName)
+		if err == nil && rc.Spec.Replicas != 0 {
+			By("Cleaning up the replication controller")
+			err := DeleteRC(c, ns, RCName)
+			expectNoError(err)
+		}
+
+		By("Removing additional pods if any")
+		for i := 1; i <= nodeCount; i++ {
+			name := additionalPodsPrefix + "-" + strconv.Itoa(i)
+			c.Pods(ns).Delete(name, nil)
+		}
+
+		expectNoError(writePerfData(c, fmt.Sprintf(testContext.OutputDir+"/%s", uuid), "after"))
+
+		// Verify latency metrics
+		highLatencyRequests, err := HighLatencyRequests(c)
+		expectNoError(err)
+		Expect(highLatencyRequests).NotTo(BeNumerically(">", 0), "There should be no high-latency requests")
+	})
+
+	framework := NewFramework("density")
+	framework.NamespaceDeletionTimeout = time.Hour
+	framework.GatherKubeSystemResourceUsageData = true
 
 	BeforeEach(func() {
-		framework.beforeEach()
 		c = framework.Client
 		ns = framework.Namespace.Name
 		var err error
@@ -113,37 +144,6 @@ var _ = Describe("Density", func() {
 				}
 			}
 		}
-	})
-
-	AfterEach(func() {
-		// We can't call it explicitly at the end, because it will not be called
-		// if Expect() fails.
-		defer framework.afterEach()
-
-		// Remove any remaining pods from this test if the
-		// replication controller still exists and the replica count
-		// isn't 0.  This means the controller wasn't cleaned up
-		// during the test so clean it up here. We want to do it separately
-		// to not cause a timeout on Namespace removal.
-		rc, err := c.ReplicationControllers(ns).Get(RCName)
-		if err == nil && rc.Spec.Replicas != 0 {
-			By("Cleaning up the replication controller")
-			err := DeleteRC(c, ns, RCName)
-			expectNoError(err)
-		}
-
-		By("Removing additional pods if any")
-		for i := 1; i <= nodeCount; i++ {
-			name := additionalPodsPrefix + "-" + strconv.Itoa(i)
-			c.Pods(ns).Delete(name, nil)
-		}
-
-		expectNoError(writePerfData(c, fmt.Sprintf(testContext.OutputDir+"/%s", uuid), "after"))
-
-		// Verify latency metrics
-		highLatencyRequests, err := HighLatencyRequests(c)
-		expectNoError(err)
-		Expect(highLatencyRequests).NotTo(BeNumerically(">", 0), "There should be no high-latency requests")
 	})
 
 	// Tests with "Skipped" substring in their name will be skipped when running
@@ -202,8 +202,8 @@ var _ = Describe("Density", func() {
 					ListFunc: func() (runtime.Object, error) {
 						return c.Events(ns).List(labels.Everything(), fields.Everything())
 					},
-					WatchFunc: func(rv string) (watch.Interface, error) {
-						return c.Events(ns).Watch(labels.Everything(), fields.Everything(), rv)
+					WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+						return c.Events(ns).Watch(labels.Everything(), fields.Everything(), options)
 					},
 				},
 				&api.Event{},
@@ -285,8 +285,8 @@ var _ = Describe("Density", func() {
 						ListFunc: func() (runtime.Object, error) {
 							return c.Pods(ns).List(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything())
 						},
-						WatchFunc: func(rv string) (watch.Interface, error) {
-							return c.Pods(ns).Watch(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything(), rv)
+						WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+							return c.Pods(ns).Watch(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything(), options)
 						},
 					},
 					&api.Pod{},

@@ -500,13 +500,6 @@ func formatEndpoints(endpoints *api.Endpoints, ports sets.String) string {
 	return ret
 }
 
-func podHostString(host, ip string) string {
-	if host == "" && ip == "" {
-		return "<unassigned>"
-	}
-	return host + "/" + ip
-}
-
 func shortHumanDuration(d time.Duration) string {
 	// Allow deviation no more than 2 seconds(excluded) to tolerate machine time
 	// inconsistence, it can be considered as almost now.
@@ -738,7 +731,7 @@ func printJob(job *extensions.Job, w io.Writer, withNamespace bool, wide bool, s
 	}
 
 	selector, _ := extensions.PodSelectorAsSelector(job.Spec.Selector)
-	_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\n",
+	_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d",
 		name,
 		firstContainer.Name,
 		firstContainer.Image,
@@ -1383,9 +1376,8 @@ func printDeploymentList(list *extensions.DeploymentList, w io.Writer, withNames
 func printHorizontalPodAutoscaler(hpa *extensions.HorizontalPodAutoscaler, w io.Writer, withNamespace bool, wide bool, showAll bool, columnLabels []string) error {
 	namespace := hpa.Namespace
 	name := hpa.Name
-	reference := fmt.Sprintf("%s/%s/%s/%s",
+	reference := fmt.Sprintf("%s/%s/%s",
 		hpa.Spec.ScaleRef.Kind,
-		hpa.Spec.ScaleRef.Namespace,
 		hpa.Spec.ScaleRef.Name,
 		hpa.Spec.ScaleRef.Subresource)
 	target := "<unset>"

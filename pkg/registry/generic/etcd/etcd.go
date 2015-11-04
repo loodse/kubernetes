@@ -129,7 +129,7 @@ func NamespaceKeyFunc(ctx api.Context, prefix string, name string) (string, erro
 	if len(name) == 0 {
 		return "", kubeerr.NewBadRequest("Name parameter required.")
 	}
-	if ok, msg := validation.ValidatePathSegmentName(name, false); !ok {
+	if ok, msg := validation.IsValidPathSegmentName(name); !ok {
 		return "", kubeerr.NewBadRequest(fmt.Sprintf("Name parameter invalid: %v.", msg))
 	}
 	key = key + "/" + name
@@ -141,7 +141,7 @@ func NoNamespaceKeyFunc(ctx api.Context, prefix string, name string) (string, er
 	if len(name) == 0 {
 		return "", kubeerr.NewBadRequest("Name parameter required.")
 	}
-	if ok, msg := validation.ValidatePathSegmentName(name, false); !ok {
+	if ok, msg := validation.IsValidPathSegmentName(name); !ok {
 		return "", kubeerr.NewBadRequest(fmt.Sprintf("Name parameter invalid: %v.", msg))
 	}
 	key := prefix + "/" + name
@@ -159,12 +159,20 @@ func (e *Etcd) NewList() runtime.Object {
 }
 
 // List returns a list of items matching labels and field
-func (e *Etcd) List(ctx api.Context, label labels.Selector, field fields.Selector) (runtime.Object, error) {
-	return e.ListPredicate(ctx, e.PredicateFunc(label, field))
+func (e *Etcd) List(ctx api.Context, options *api.ListOptions) (runtime.Object, error) {
+	label := labels.Everything()
+	if options != nil && options.LabelSelector != nil {
+		label = options.LabelSelector
+	}
+	field := fields.Everything()
+	if options != nil && options.FieldSelector != nil {
+		field = options.FieldSelector
+	}
+	return e.ListPredicate(ctx, e.PredicateFunc(label, field), options)
 }
 
 // ListPredicate returns a list of all the items matching m.
-func (e *Etcd) ListPredicate(ctx api.Context, m generic.Matcher) (runtime.Object, error) {
+func (e *Etcd) ListPredicate(ctx api.Context, m generic.Matcher, options *api.ListOptions) (runtime.Object, error) {
 	list := e.NewListFunc()
 	trace := util.NewTrace("List " + reflect.TypeOf(list).String())
 	filterFunc := e.filterAndDecorateFunction(m)
@@ -183,7 +191,14 @@ func (e *Etcd) ListPredicate(ctx api.Context, m generic.Matcher) (runtime.Object
 	}
 
 	trace.Step("About to list directory")
-	err := e.Storage.List(ctx, e.KeyRootFunc(ctx), filterFunc, list)
+	if options == nil {
+		options = &api.ListOptions{ResourceVersion: "0"}
+	}
+	version, err := storage.ParseWatchResourceVersion(options.ResourceVersion, e.EndpointName)
+	if err != nil {
+		return nil, err
+	}
+	err = e.Storage.List(ctx, e.KeyRootFunc(ctx), version, filterFunc, list)
 	trace.Step("List extracted")
 	if err != nil {
 		return nil, err
@@ -456,7 +471,19 @@ func (e *Etcd) finalizeDelete(obj runtime.Object, runHooks bool) (runtime.Object
 // WatchPredicate. If possible, you should customize PredicateFunc to produre a
 // matcher that matches by key. generic.SelectionPredicate does this for you
 // automatically.
-func (e *Etcd) Watch(ctx api.Context, label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
+func (e *Etcd) Watch(ctx api.Context, options *api.ListOptions) (watch.Interface, error) {
+	label := labels.Everything()
+	if options != nil && options.LabelSelector != nil {
+		label = options.LabelSelector
+	}
+	field := fields.Everything()
+	if options != nil && options.FieldSelector != nil {
+		field = options.FieldSelector
+	}
+	resourceVersion := ""
+	if options != nil {
+		resourceVersion = options.ResourceVersion
+	}
 	return e.WatchPredicate(ctx, e.PredicateFunc(label, field), resourceVersion)
 }
 

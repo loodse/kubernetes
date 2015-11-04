@@ -110,6 +110,22 @@ func verifyResult(c *client.Client, podName string, ns string) {
 			"reason":                   "FailedScheduling",
 		}.AsSelector())
 	expectNoError(err)
+	// If we failed to find event with a capitalized first letter of reason
+	// try looking for one starting with a small one for backward compatibility.
+	// If we don't do it we end up in #15806.
+	// TODO: remove this block when we don't care about supporting v1.0 too much.
+	if len(schedEvents.Items) == 0 {
+		schedEvents, err = c.Events(ns).List(
+			labels.Everything(),
+			fields.Set{
+				"involvedObject.kind":      "Pod",
+				"involvedObject.name":      podName,
+				"involvedObject.namespace": ns,
+				"source":                   "scheduler",
+				"reason":                   "failedScheduling",
+			}.AsSelector())
+		expectNoError(err)
+	}
 
 	printed := false
 	printOnce := func(msg string) string {
@@ -159,30 +175,29 @@ func waitForStableCluster(c *client.Client) int {
 }
 
 var _ = Describe("SchedulerPredicates", func() {
-	framework := Framework{BaseName: "sched-pred"}
 	var c *client.Client
 	var nodeList *api.NodeList
 	var totalPodCapacity int64
 	var RCName string
 	var ns string
 
-	BeforeEach(func() {
-		framework.beforeEach()
-		c = framework.Client
-		ns = framework.Namespace.Name
-		var err error
-		nodeList, err = c.Nodes().List(labels.Everything(), fields.Everything())
-		expectNoError(err)
-	})
-
 	AfterEach(func() {
-		defer framework.afterEach()
 		rc, err := c.ReplicationControllers(ns).Get(RCName)
 		if err == nil && rc.Spec.Replicas != 0 {
 			By("Cleaning up the replication controller")
 			err := DeleteRC(c, ns, RCName)
 			expectNoError(err)
 		}
+	})
+
+	framework := NewFramework("sched-pred")
+
+	BeforeEach(func() {
+		c = framework.Client
+		ns = framework.Namespace.Name
+		var err error
+		nodeList, err = c.Nodes().List(labels.Everything(), fields.Everything())
+		expectNoError(err)
 	})
 
 	// This test verifies that max-pods flag works as advertised. It assumes that cluster add-on pods stay stable

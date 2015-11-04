@@ -15,9 +15,32 @@
 # limitations under the License.
 
 ZONE=${KUBE_AWS_ZONE:-us-west-2a}
-MASTER_SIZE=${MASTER_SIZE:-t2.micro}
-MINION_SIZE=${MINION_SIZE:-t2.micro}
+MASTER_SIZE=${MASTER_SIZE:-}
+MINION_SIZE=${MINION_SIZE:-}
 NUM_MINIONS=${NUM_MINIONS:-4}
+
+# Dynamically set node sizes so that Heapster has enough space to run
+if [[ -z ${MINION_SIZE} ]]; then
+  if (( ${NUM_MINIONS} < 50 )); then
+    MINION_SIZE="t2.micro"
+  elif (( ${NUM_MINIONS} < 150 )); then
+    MINION_SIZE="t2.small"
+  else
+    MINION_SIZE="t2.medium"
+  fi
+fi
+
+# Dynamically set the master size by the number of nodes, these are guesses
+# TODO: gather some data
+if [[ -z ${MASTER_SIZE} ]]; then
+  if (( ${NUM_MINIONS} < 50 )); then
+    MASTER_SIZE="t2.micro"
+  elif (( ${NUM_MINIONS} < 150 )); then
+    MASTER_SIZE="t2.small"
+  else
+    MASTER_SIZE="t2.medium"
+  fi
+fi
 
 # Optional: Set AWS_S3_BUCKET to the name of an S3 bucket to use for uploading binaries
 # (otherwise a unique bucket name will be generated for you)
@@ -122,3 +145,6 @@ NETWORK_PROVIDER="${NETWORK_PROVIDER:-none}" # opencontrail
 OPENCONTRAIL_TAG="${OPENCONTRAIL_TAG:-R2.20}"
 OPENCONTRAIL_KUBERNETES_TAG="${OPENCONTRAIL_KUBERNETES_TAG:-master}"
 OPENCONTRAIL_PUBLIC_SUBNET="${OPENCONTRAIL_PUBLIC_SUBNET:-10.1.0.0/16}"
+
+# Optional: if set to true, kube-up will configure the cluster to run e2e tests.
+E2E_STORAGE_TEST_ENVIRONMENT=${KUBE_E2E_STORAGE_TEST_ENVIRONMENT:-false}

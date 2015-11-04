@@ -66,8 +66,8 @@ func NewPersistentVolumeRecycler(kubeClient client.Interface, syncPeriod time.Du
 			ListFunc: func() (runtime.Object, error) {
 				return kubeClient.PersistentVolumes().List(labels.Everything(), fields.Everything())
 			},
-			WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-				return kubeClient.PersistentVolumes().Watch(labels.Everything(), fields.Everything(), resourceVersion)
+			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				return kubeClient.PersistentVolumes().Watch(labels.Everything(), fields.Everything(), options)
 			},
 		},
 		&api.PersistentVolume{},

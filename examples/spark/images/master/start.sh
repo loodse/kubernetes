@@ -14,6 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-export SPARK_MASTER_PORT=${SPARK_MASTER_SERVICE_PORT:-7077}
+. /start-common.sh
+
+echo "$(hostname -i) spark-master" >> /etc/hosts
+export SPARK_LOCAL_HOSTNAME=spark-master
+export SPARK_MASTER_IP=spark-master
+
 /opt/spark/sbin/start-master.sh
 tail -F /opt/spark/logs/*

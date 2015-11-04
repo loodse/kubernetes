@@ -51,6 +51,8 @@ import (
 )
 
 const (
+	RktType = "rkt"
+
 	acVersion             = "0.7.1"
 	minimumRktVersion     = "0.9.0"
 	recommendRktVersion   = "0.9.0"
@@ -109,8 +111,9 @@ func New(config *Config,
 	containerRefManager *kubecontainer.RefManager,
 	livenessManager proberesults.Manager,
 	volumeGetter volumeGetter,
-	imageBackOff *util.Backoff) (*Runtime, error) {
-
+	imageBackOff *util.Backoff,
+	serializeImagePulls bool,
+) (*Runtime, error) {
 	systemdVersion, err := getSystemdVersion()
 	if err != nil {
 		return nil, err
@@ -149,7 +152,11 @@ func New(config *Config,
 		livenessManager:     livenessManager,
 		volumeGetter:        volumeGetter,
 	}
-	rkt.imagePuller = kubecontainer.NewImagePuller(recorder, rkt, imageBackOff)
+	if serializeImagePulls {
+		rkt.imagePuller = kubecontainer.NewSerializedImagePuller(recorder, rkt, imageBackOff)
+	} else {
+		rkt.imagePuller = kubecontainer.NewImagePuller(recorder, rkt, imageBackOff)
+	}
 
 	// Test the rkt version.
 	version, err := rkt.Version()
@@ -483,7 +490,7 @@ func (r *Runtime) makePodManifest(pod *api.Pod, pullSecrets []api.Secret) (*appc
 		manifest.Volumes = append(manifest.Volumes, appctypes.Volume{
 			Name:   *volName,
 			Kind:   "host",
-			Source: volume.GetPath(),
+			Source: volume.Builder.GetPath(),
 		})
 	}
 
@@ -857,6 +864,10 @@ func (r *Runtime) getPodStatus(serviceName string) (*api.PodStatus, error) {
 func (r *Runtime) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 	serviceName := makePodServiceFileName(pod.UID)
 	return r.getPodStatus(serviceName)
+}
+
+func (r *Runtime) Type() string {
+	return RktType
 }
 
 // Version invokes 'rkt version' to get the version information of the rkt

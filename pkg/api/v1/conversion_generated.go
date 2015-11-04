@@ -1127,6 +1127,12 @@ func autoconvert_api_ListOptions_To_v1_ListOptions(in *api.ListOptions, out *Lis
 	}
 	out.Watch = in.Watch
 	out.ResourceVersion = in.ResourceVersion
+	if in.TimeoutSeconds != nil {
+		out.TimeoutSeconds = new(int64)
+		*out.TimeoutSeconds = *in.TimeoutSeconds
+	} else {
+		out.TimeoutSeconds = nil
+	}
 	return nil
 }
 
@@ -1879,10 +1885,6 @@ func autoconvert_api_Pod_To_v1_Pod(in *api.Pod, out *Pod, s conversion.Scope) er
 		return err
 	}
 	return nil
-}
-
-func convert_api_Pod_To_v1_Pod(in *api.Pod, out *Pod, s conversion.Scope) error {
-	return autoconvert_api_Pod_To_v1_Pod(in, out, s)
 }
 
 func autoconvert_api_PodAttachOptions_To_v1_PodAttachOptions(in *api.PodAttachOptions, out *PodAttachOptions, s conversion.Scope) error {
@@ -4146,6 +4148,12 @@ func autoconvert_v1_ListOptions_To_api_ListOptions(in *ListOptions, out *api.Lis
 	}
 	out.Watch = in.Watch
 	out.ResourceVersion = in.ResourceVersion
+	if in.TimeoutSeconds != nil {
+		out.TimeoutSeconds = new(int64)
+		*out.TimeoutSeconds = *in.TimeoutSeconds
+	} else {
+		out.TimeoutSeconds = nil
+	}
 	return nil
 }
 
@@ -4898,10 +4906,6 @@ func autoconvert_v1_Pod_To_api_Pod(in *Pod, out *api.Pod, s conversion.Scope) er
 		return err
 	}
 	return nil
-}
-
-func convert_v1_Pod_To_api_Pod(in *Pod, out *api.Pod, s conversion.Scope) error {
-	return autoconvert_v1_Pod_To_api_Pod(in, out, s)
 }
 
 func autoconvert_v1_PodAttachOptions_To_api_PodAttachOptions(in *PodAttachOptions, out *api.PodAttachOptions, s conversion.Scope) error {

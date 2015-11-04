@@ -45,6 +45,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/oom"
 
 	"github.com/golang/glog"
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
@@ -62,18 +63,20 @@ type ProxyServerConfig struct {
 	ProxyMode          string
 	IptablesSyncPeriod time.Duration
 	ConfigSyncPeriod   time.Duration
-	nodeRef            *api.ObjectReference // Reference to this node.
+	NodeRef            *api.ObjectReference // Reference to this node.
 	MasqueradeAll      bool
 	CleanupAndExit     bool
-	KubeApiQps         float32
-	KubeApiBurst       int
+	KubeAPIQPS         float32
+	KubeAPIBurst       int
 	UDPIdleTimeout     time.Duration
 }
 
 type ProxyServer struct {
+	Client       *kubeclient.Client
 	Config       *ProxyServerConfig
 	IptInterface utiliptables.Interface
 	Proxier      proxy.ProxyProvider
+	Broadcaster  record.EventBroadcaster
 	Recorder     record.EventRecorder
 }
 
@@ -93,8 +96,8 @@ func (s *ProxyServerConfig) AddFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&s.ConfigSyncPeriod, "config-sync-period", s.ConfigSyncPeriod, "How often configuration from the apiserver is refreshed.  Must be greater than 0.")
 	fs.BoolVar(&s.MasqueradeAll, "masquerade-all", false, "If using the pure iptables proxy, SNAT everything")
 	fs.BoolVar(&s.CleanupAndExit, "cleanup-iptables", false, "If true cleanup iptables rules and exit.")
-	fs.Float32Var(&s.KubeApiQps, "kube-api-qps", s.KubeApiQps, "QPS to use while talking with kubernetes apiserver")
-	fs.IntVar(&s.KubeApiBurst, "kube-api-burst", s.KubeApiBurst, "Burst to use while talking with kubernetes apiserver")
+	fs.Float32Var(&s.KubeAPIQPS, "kube-api-qps", s.KubeAPIQPS, "QPS to use while talking with kubernetes apiserver")
+	fs.IntVar(&s.KubeAPIBurst, "kube-api-burst", s.KubeAPIBurst, "Burst to use while talking with kubernetes apiserver")
 	fs.DurationVar(&s.UDPIdleTimeout, "udp-timeout", s.UDPIdleTimeout, "How long an idle UDP connection will be kept open (e.g. '250ms', '2s').  Must be greater than 0. Only applicable for proxy-mode=userspace")
 }
 
@@ -122,24 +125,48 @@ func NewProxyConfig() *ProxyServerConfig {
 		ResourceContainer:  "/kube-proxy",
 		IptablesSyncPeriod: 30 * time.Second,
 		ConfigSyncPeriod:   15 * time.Minute,
-		KubeApiQps:         5.0,
-		KubeApiBurst:       10,
+		KubeAPIQPS:         5.0,
+		KubeAPIBurst:       10,
 		UDPIdleTimeout:     250 * time.Millisecond,
 	}
 }
 
 func NewProxyServer(
+	client *kubeclient.Client,
 	config *ProxyServerConfig,
 	iptInterface utiliptables.Interface,
 	proxier proxy.ProxyProvider,
+	broadcaster record.EventBroadcaster,
 	recorder record.EventRecorder,
 ) (*ProxyServer, error) {
 	return &ProxyServer{
+		Client:       client,
 		Config:       config,
 		IptInterface: iptInterface,
 		Proxier:      proxier,
+		Broadcaster:  broadcaster,
 		Recorder:     recorder,
 	}, nil
+}
+
+// NewProxyCommand creates a *cobra.Command object with default parameters
+func NewProxyCommand() *cobra.Command {
+	s := NewProxyConfig()
+	s.AddFlags(pflag.CommandLine)
+	cmd := &cobra.Command{
+		Use: "kube-proxy",
+		Long: `The Kubernetes network proxy runs on each node. This
+reflects services as defined in the Kubernetes API on each node and can do simple
+TCP,UDP stream forwarding or round robin TCP,UDP forwarding across a set of backends.
+Service cluster ips and ports are currently found through Docker-links-compatible
+environment variables specifying ports opened by the service proxy. There is an optional
+addon that provides cluster DNS for these cluster IPs. The user must create a service
+with the apiserver API to configure the proxy.`,
+		Run: func(cmd *cobra.Command, args []string) {
+		},
+	}
+
+	return cmd
 }
 
 // NewProxyServerDefault creates a new ProxyServer object with default parameters.
@@ -195,8 +222,8 @@ func NewProxyServerDefault(config *ProxyServerConfig) (*ProxyServer, error) {
 	}
 
 	// Override kubeconfig qps/burst settings from flags
-	kubeconfig.QPS = config.KubeApiQps
-	kubeconfig.Burst = config.KubeApiBurst
+	kubeconfig.QPS = config.KubeAPIQPS
+	kubeconfig.Burst = config.KubeAPIBurst
 
 	client, err := kubeclient.New(kubeconfig)
 	if err != nil {
@@ -207,7 +234,6 @@ func NewProxyServerDefault(config *ProxyServerConfig) (*ProxyServer, error) {
 	hostname := nodeutil.GetHostname(config.HostnameOverride)
 	eventBroadcaster := record.NewBroadcaster()
 	recorder := eventBroadcaster.NewRecorder(api.EventSource{Component: "kube-proxy", Host: hostname})
-	eventBroadcaster.StartRecordingToSink(client.Events(""))
 
 	var proxier proxy.ProxyProvider
 	var endpointsHandler proxyconfig.EndpointsConfigHandler
@@ -269,13 +295,13 @@ func NewProxyServerDefault(config *ProxyServerConfig) (*ProxyServer, error) {
 		endpointsConfig.Channel("api"),
 	)
 
-	config.nodeRef = &api.ObjectReference{
+	config.NodeRef = &api.ObjectReference{
 		Kind:      "Node",
 		Name:      hostname,
 		UID:       types.UID(hostname),
 		Namespace: "",
 	}
-	return NewProxyServer(config, iptInterface, proxier, recorder)
+	return NewProxyServer(client, config, iptInterface, proxier, eventBroadcaster, recorder)
 }
 
 // Run runs the specified ProxyServer.  This should never exit (unless CleanupAndExit is set).
@@ -289,6 +315,8 @@ func (s *ProxyServer) Run(_ []string) error {
 		}
 		return nil
 	}
+
+	s.Broadcaster.StartRecordingToSink(s.Client.Events(""))
 
 	// Birth Cry after the birth is successful
 	s.birthCry()
@@ -353,5 +381,5 @@ func mayTryIptablesProxy(proxyMode string, client nodeGetter, hostname string) b
 }
 
 func (s *ProxyServer) birthCry() {
-	s.Recorder.Eventf(s.Config.nodeRef, "Starting", "Starting kube-proxy.")
+	s.Recorder.Eventf(s.Config.NodeRef, "Starting", "Starting kube-proxy.")
 }

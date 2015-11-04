@@ -22,25 +22,26 @@ set -o nounset
 set -o pipefail
 
 KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
-DEFAULT_OUTPUT_PATH="$PWD/${KUBE_ROOT}/docs/api-reference"
+REPO_DIR=${REPO_DIR:-"${PWD}/${KUBE_ROOT}"}
+DEFAULT_OUTPUT_PATH="${REPO_DIR}/docs/api-reference"
 OUTPUT=${1:-${DEFAULT_OUTPUT_PATH}}
 
 echo "Generating api reference docs at ${OUTPUT}"
 
 V1_PATH="${OUTPUT}/v1/"
 V1BETA1_PATH="${OUTPUT}/extensions/v1beta1"
-SWAGGER_PATH="$PWD/${KUBE_ROOT}/api/swagger-spec/"
+SWAGGER_PATH="${REPO_DIR}/api/swagger-spec/"
 
 echo "Reading swagger spec from: ${SWAGGER_PATH}"
 
 mkdir -p $V1_PATH
 mkdir -p $V1BETA1_PATH
 
-docker run -v $V1_PATH:/output -v ${SWAGGER_PATH}:/swagger-source gcr.io/google_containers/gen-swagger-docs:v3 \
+docker run --rm -v $V1_PATH:/output:z -v ${SWAGGER_PATH}:/swagger-source:z gcr.io/google_containers/gen-swagger-docs:v3 \
     v1 \
     https://raw.githubusercontent.com/kubernetes/kubernetes/master/pkg/api/v1/register.go
 
-docker run -v $V1BETA1_PATH:/output -v ${SWAGGER_PATH}:/swagger-source gcr.io/google_containers/gen-swagger-docs:v3 \
+docker run --rm -v $V1BETA1_PATH:/output:z -v ${SWAGGER_PATH}:/swagger-source:z gcr.io/google_containers/gen-swagger-docs:v3 \
     v1beta1 \
     https://raw.githubusercontent.com/kubernetes/kubernetes/master/pkg/apis/extensions/v1beta1/register.go
 

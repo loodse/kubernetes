@@ -68,8 +68,8 @@ func New(kubeClient client.Interface, resyncPeriod controller.ResyncPeriodFunc, 
 			ListFunc: func() (runtime.Object, error) {
 				return gcc.kubeClient.Pods(api.NamespaceAll).List(labels.Everything(), terminatedSelector)
 			},
-			WatchFunc: func(rv string) (watch.Interface, error) {
-				return gcc.kubeClient.Pods(api.NamespaceAll).Watch(labels.Everything(), terminatedSelector, rv)
+			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				return gcc.kubeClient.Pods(api.NamespaceAll).Watch(labels.Everything(), terminatedSelector, options)
 			},
 		},
 		&api.Pod{},

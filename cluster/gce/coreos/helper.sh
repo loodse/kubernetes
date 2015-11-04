@@ -21,6 +21,8 @@ function build-kube-env {
   local master=$1
   local file=$2
 
+  build-runtime-config
+
   rm -f ${file}
   # TODO(dawnchen): master node is still running with debian image
   if [[ "${master}" == "true" ]]; then
@@ -69,6 +71,7 @@ KUBELET_KEY: $(yaml-quote ${KUBELET_KEY_BASE64:-})
 KUBECFG_CERT: $(yaml-quote ${KUBECFG_CERT_BASE64:-})
 KUBECFG_KEY: $(yaml-quote ${KUBECFG_KEY_BASE64:-})
 KUBELET_APISERVER: $(yaml-quote ${KUBELET_APISERVER:-})
+NUM_MINIONS: $(yaml-quote ${NUM_MINIONS})
 EOF
   else
     cat >>$file <<EOF
@@ -86,6 +89,7 @@ LOGGING_DESTINATION=${LOGGING_DESTINATION:-}
 ELASTICSEARCH_LOGGING_REPLICAS=${ELASTICSEARCH_LOGGING_REPLICAS:-}
 ENABLE_CLUSTER_DNS=${ENABLE_CLUSTER_DNS:-false}
 ENABLE_CLUSTER_REGISTRY=${ENABLE_CLUSTER_REGISTRY:-false}
+NUM_MINIONS=${NUM_MINIONS}
 DNS_REPLICAS=${DNS_REPLICAS:-}
 DNS_SERVER_IP=${DNS_SERVER_IP:-}
 DNS_DOMAIN=${DNS_DOMAIN:-}

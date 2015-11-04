@@ -48,33 +48,6 @@ function join_csv {
 
 # Verify prereqs
 function verify-prereqs {
-  if [[ "${ENABLE_EXPERIMENTAL_API}" == "true" ]]; then
-    if [[ -z "${RUNTIME_CONFIG}" ]]; then
-      RUNTIME_CONFIG="extensions/v1beta1=true"
-    else
-      # TODO: add checking if RUNTIME_CONFIG contains "extensions/v1beta1=false" and appending "extensions/v1beta1=true" if not.
-      if echo "${RUNTIME_CONFIG}" | grep -q -v "extensions/v1beta1=true"; then
-        echo "Experimental API should be turned on, but is not turned on in RUNTIME_CONFIG!" >&2
-        exit 1
-      fi
-    fi
-  fi
-  if [[ "${ENABLE_DEPLOYMENTS}" == "true" ]]; then
-    if [[ -z "${RUNTIME_CONFIG}" ]]; then
-      RUNTIME_CONFIG="extensions/v1beta1/deployments=true"
-    else
-      RUNTIME_CONFIG="${RUNTIME_CONFIG},extensions/v1beta1/deployments=true"
-    fi
-  fi
-  if [[ "${ENABLE_DAEMONSETS}" == "true" ]]; then
-    if [[ -z "${RUNTIME_CONFIG}" ]]; then
-      RUNTIME_CONFIG="extensions/v1beta1/daemonsets=true"
-    else
-      RUNTIME_CONFIG="${RUNTIME_CONFIG},extensions/v1beta1/daemonsets=true"
-    fi
-  fi
-
-
   local cmd
   for cmd in gcloud gsutil; do
     if ! which "${cmd}" >/dev/null; then
@@ -106,8 +79,8 @@ function verify-prereqs {
   if [ ! -w $(dirname `which gcloud`) ]; then
     sudo_prefix="sudo"
   fi
-  ${sudo_prefix} gcloud ${gcloud_prompt:-} components update preview || true
   ${sudo_prefix} gcloud ${gcloud_prompt:-} components update alpha || true
+  ${sudo_prefix} gcloud ${gcloud_prompt:-} components update beta || true
   ${sudo_prefix} gcloud ${gcloud_prompt:-} components update || true
 }
 
@@ -575,8 +548,8 @@ function kube-up {
   ensure-temp-dir
   detect-project
 
-  gen-kube-basicauth
-  gen-kube-bearertoken
+  load-or-gen-kube-basicauth
+  load-or-gen-kube-bearertoken
 
   # Make sure we have the tar files staged on Google Storage
   find-release-tars
@@ -1254,4 +1227,33 @@ function restart-apiserver {
 # Perform preparations required to run e2e tests
 function prepare-e2e() {
   detect-project
+}
+
+# Builds the RUNTIME_CONFIG var from other feature enable options
+function build-runtime-config() {
+  if [[ "${ENABLE_EXPERIMENTAL_API}" == "true" ]]; then
+      if [[ -z "${RUNTIME_CONFIG}" ]]; then
+          RUNTIME_CONFIG="extensions/v1beta1=true"
+      else
+          # TODO: add checking if RUNTIME_CONFIG contains "extensions/v1beta1=false" and appending "extensions/v1beta1=true" if not.
+          if echo "${RUNTIME_CONFIG}" | grep -q -v "extensions/v1beta1=true"; then
+              echo "Experimental API should be turned on, but is not turned on in RUNTIME_CONFIG!" >&2
+              exit 1
+          fi
+      fi
+  fi
+  if [[ "${ENABLE_DEPLOYMENTS}" == "true" ]]; then
+      if [[ -z "${RUNTIME_CONFIG}" ]]; then
+          RUNTIME_CONFIG="extensions/v1beta1/deployments=true"
+      else
+          RUNTIME_CONFIG="${RUNTIME_CONFIG},extensions/v1beta1/deployments=true"
+      fi
+  fi
+  if [[ "${ENABLE_DAEMONSETS}" == "true" ]]; then
+      if [[ -z "${RUNTIME_CONFIG}" ]]; then
+          RUNTIME_CONFIG="extensions/v1beta1/daemonsets=true"
+      else
+          RUNTIME_CONFIG="${RUNTIME_CONFIG},extensions/v1beta1/daemonsets=true"
+      fi
+  fi
 }

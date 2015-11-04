@@ -154,6 +154,10 @@ type glusterfsBuilder struct {
 
 var _ volume.Builder = &glusterfsBuilder{}
 
+func (_ *glusterfsBuilder) SupportsOwnershipManagement() bool {
+	return false
+}
+
 // SetUp attaches the disk and bind mounts to the volume path.
 func (b *glusterfsBuilder) SetUp() error {
 	return b.SetUpAt(b.GetPath())
@@ -183,6 +187,10 @@ func (b *glusterfsBuilder) SetUpAt(dir string) error {
 
 func (b *glusterfsBuilder) IsReadOnly() bool {
 	return b.readOnly
+}
+
+func (b *glusterfsBuilder) SupportsSELinux() bool {
+	return false
 }
 
 func (glusterfsVolume *glusterfs) GetPath() string {

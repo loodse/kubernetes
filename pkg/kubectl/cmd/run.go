@@ -26,11 +26,9 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/kubectl"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
@@ -56,7 +54,7 @@ $ kubectl run nginx --image=nginx --dry-run
 $ kubectl run nginx --image=nginx --overrides='{ "apiVersion": "v1", "spec": { ... } }'
 
 # Start a single instance of nginx and keep it in the foreground, don't restart it if it exits.
-$ kubectl run -i -tty nginx --image=nginx --restart=Never
+$ kubectl run -i --tty nginx --image=nginx --restart=Never
 
 # Start the nginx container using the default command, but use custom arguments (arg1 .. argN) for that command.
 $ kubectl run nginx --image=nginx -- <arg1> <arg2> ... <argN>
@@ -170,7 +168,7 @@ func Run(f *cmdutil.Factory, cmdIn io.Reader, cmdOut, cmdErr io.Writer, cmd *cob
 		}
 	}
 
-	obj, kind, mapper, mapping, err := createGeneratedObject(f, cmd, generator, names, params, cmdutil.GetFlagString(cmd, "overrides"), namespace)
+	obj, _, mapper, mapping, err := createGeneratedObject(f, cmd, generator, names, params, cmdutil.GetFlagString(cmd, "overrides"), namespace)
 	if err != nil {
 		return err
 	}
@@ -202,15 +200,12 @@ func Run(f *cmdutil.Factory, cmdIn io.Reader, cmdOut, cmdErr io.Writer, cmd *cob
 			return err
 		}
 		opts.Client = client
-		// TODO: this should be abstracted into Factory to support other types
-		switch t := obj.(type) {
-		case *api.ReplicationController:
-			return handleAttachReplicationController(client, t, opts)
-		case *api.Pod:
-			return handleAttachPod(client, t, opts)
-		default:
-			return fmt.Errorf("cannot attach to %s: not implemented", kind)
+
+		attachablePod, err := f.AttachablePodForObject(obj)
+		if err != nil {
+			return err
 		}
+		return handleAttachPod(client, attachablePod, opts)
 	}
 
 	outputFormat := cmdutil.GetFlagString(cmd, "output")
@@ -247,22 +242,6 @@ func waitForPodRunning(c *client.Client, pod *api.Pod, out io.Writer) (status ap
 		time.Sleep(2 * time.Second)
 		continue
 	}
-}
-
-func handleAttachReplicationController(c *client.Client, controller *api.ReplicationController, opts *AttachOptions) error {
-	var pods *api.PodList
-	for pods == nil || len(pods.Items) == 0 {
-		var err error
-		if pods, err = c.Pods(controller.Namespace).List(labels.SelectorFromSet(controller.Spec.Selector), fields.Everything()); err != nil {
-			return err
-		}
-		if len(pods.Items) == 0 {
-			fmt.Fprint(opts.Out, "Waiting for pod to be scheduled\n")
-			time.Sleep(2 * time.Second)
-		}
-	}
-	pod := &pods.Items[0]
-	return handleAttachPod(c, pod, opts)
 }
 
 func handleAttachPod(c *client.Client, pod *api.Pod, opts *AttachOptions) error {
@@ -397,13 +376,7 @@ func createGeneratedObject(f *cmdutil.Factory, cmd *cobra.Command, generator kub
 			return nil, "", nil, nil, err
 		}
 
-		// Serialize the object with the annotation applied.
-		data, err := mapping.Codec.Encode(info.Object)
-		if err != nil {
-			return nil, "", nil, nil, err
-		}
-
-		obj, err = resource.NewHelper(client, mapping).Create(namespace, false, data)
+		obj, err = resource.NewHelper(client, mapping).Create(namespace, false, info.Object)
 		if err != nil {
 			return nil, "", nil, nil, err
 		}

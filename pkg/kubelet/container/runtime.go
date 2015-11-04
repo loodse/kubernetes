@@ -70,7 +70,11 @@ type ImageSpec struct {
 
 // Runtime interface defines the interfaces that should be implemented
 // by a container runtime.
+// Thread safety is required from implementations of this interface.
 type Runtime interface {
+	// Type returns the type of the container runtime.
+	Type() string
+
 	// Version returns the version information of the container runtime.
 	Version() (Version, error)
 	// GetPods returns a list containers group by pods. The boolean parameter
@@ -237,6 +241,8 @@ type Mount struct {
 	HostPath string
 	// Whether the mount is read-only.
 	ReadOnly bool
+	// Whether the mount needs SELinux relabeling
+	SELinuxRelabel bool
 }
 
 type PortMapping struct {
@@ -272,7 +278,16 @@ type RunContainerOptions struct {
 	CgroupParent string
 }
 
-type VolumeMap map[string]volume.Volume
+// VolumeInfo contains information about the volume.
+type VolumeInfo struct {
+	// Builder is the volume's builder
+	Builder volume.Builder
+	// SELinuxLabeled indicates whether this volume has had the
+	// pod's SELinux label applied to it or not
+	SELinuxLabeled bool
+}
+
+type VolumeMap map[string]VolumeInfo
 
 type Pods []*Pod
 
@@ -346,7 +361,7 @@ func (p *Pod) IsEmpty() bool {
 func GetPodFullName(pod *api.Pod) string {
 	// Use underscore as the delimiter because it is not allowed in pod name
 	// (DNS subdomain format), while allowed in the container name format.
-	return fmt.Sprintf("%s_%s", pod.Name, pod.Namespace)
+	return pod.Name + "_" + pod.Namespace
 }
 
 // Build the pod full name from pod name and namespace.

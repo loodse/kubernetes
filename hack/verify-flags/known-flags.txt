@@ -59,6 +59,7 @@ cpu-percent
 default-container-cpu-limit
 default-container-mem-limit
 delay-shutdown
+delete-namespace
 deleting-pods-burst
 deleting-pods-qps
 deployment-label-key
@@ -178,10 +179,11 @@ mesos-authentication-secret-file
 mesos-cgroup-prefix
 mesos-executor-cpus
 mesos-executor-mem
+mesos-launch-grace-period
 mesos-master
 mesos-role
+mesos-sandbox-overlay
 mesos-user
-mesos-launch-grace-period
 minimum-container-ttl-duration
 minion-max-log-age
 minion-max-log-backups
@@ -257,6 +259,7 @@ runtime-config
 scheduler-config
 schema-cache-dir
 secure-port
+serialize-image-pulls
 service-account-key-file
 service-account-lookup
 service-account-private-key-file
@@ -303,6 +306,7 @@ user-whitelist
 watch-cache
 watch-only
 whitelist-override-label
+windows-line-endings
 www-prefix
 retry_time
 file_content_in_loop
@@ -311,4 +315,3 @@ terminated-pod-gc-threshold
 reconcile-cidr
 register-schedulable
 repair-malformed-updates
-

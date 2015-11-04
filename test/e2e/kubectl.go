@@ -76,23 +76,12 @@ var proxyRegexp = regexp.MustCompile("Starting to serve on 127.0.0.1:([0-9]+)")
 
 var _ = Describe("Kubectl client", func() {
 	defer GinkgoRecover()
+	framework := NewFramework("kubectl")
 	var c *client.Client
 	var ns string
-	var testingNs *api.Namespace
 	BeforeEach(func() {
-		var err error
-		c, err = loadClient()
-		expectNoError(err)
-		testingNs, err = createTestingNS("kubectl", c)
-		Expect(err).NotTo(HaveOccurred())
-		ns = testingNs.Name
-	})
-
-	AfterEach(func() {
-		By(fmt.Sprintf("Destroying namespace for this suite %v", ns))
-		if err := deleteNS(c, ns, 5*time.Minute /* namespace deletion timeout */); err != nil {
-			Failf("Couldn't delete ns %s", err)
-		}
+		c = framework.Client
+		ns = framework.Namespace.Name
 	})
 
 	Describe("Update Demo", func() {
@@ -438,9 +427,6 @@ var _ = Describe("Kubectl client", func() {
 		It("should check if v1 is in available api versions [Conformance]", func() {
 			By("validating api verions")
 			output := runKubectl("api-versions")
-			if !strings.Contains(output, "Available Server Api Versions:") {
-				Failf("Missing caption in kubectl api-versions")
-			}
 			if !strings.Contains(output, "v1") {
 				Failf("No v1 in kubectl api-versions")
 			}

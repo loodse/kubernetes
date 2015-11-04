@@ -85,8 +85,8 @@ func NewServiceAccount(cl client.Interface) *serviceAccount {
 			ListFunc: func() (runtime.Object, error) {
 				return cl.ServiceAccounts(api.NamespaceAll).List(labels.Everything(), fields.Everything())
 			},
-			WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-				return cl.ServiceAccounts(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), resourceVersion)
+			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				return cl.ServiceAccounts(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), options)
 			},
 		},
 		&api.ServiceAccount{},
@@ -99,8 +99,8 @@ func NewServiceAccount(cl client.Interface) *serviceAccount {
 			ListFunc: func() (runtime.Object, error) {
 				return cl.Secrets(api.NamespaceAll).List(labels.Everything(), tokenSelector)
 			},
-			WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-				return cl.Secrets(api.NamespaceAll).Watch(labels.Everything(), tokenSelector, resourceVersion)
+			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				return cl.Secrets(api.NamespaceAll).Watch(labels.Everything(), tokenSelector, options)
 			},
 		},
 		&api.Secret{},

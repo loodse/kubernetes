@@ -15,9 +15,34 @@
 # limitations under the License.
 
 ZONE=${KUBE_AWS_ZONE:-us-west-2a}
-MASTER_SIZE=${MASTER_SIZE:-t2.micro}
-MINION_SIZE=${MINION_SIZE:-t2.micro}
+
+MASTER_SIZE=${MASTER_SIZE:-}
+MINION_SIZE=${MINION_SIZE:-}
 NUM_MINIONS=${NUM_MINIONS:-2}
+
+# Dynamically set node sizes so that Heapster has enough space to run
+if [[ -z ${MINION_SIZE} ]]; then
+  if (( ${NUM_MINIONS} < 50 )); then
+    MINION_SIZE="t2.micro"
+  elif (( ${NUM_MINIONS} < 150 )); then
+    MINION_SIZE="t2.small"
+  else
+    MINION_SIZE="t2.medium"
+  fi
+fi
+
+# Dynamically set the master size by the number of nodes, these are guesses
+# TODO: gather some data
+if [[ -z ${MASTER_SIZE} ]]; then
+  if (( ${NUM_MINIONS} < 50 )); then
+    MASTER_SIZE="t2.micro"
+  elif (( ${NUM_MINIONS} < 150 )); then
+    MASTER_SIZE="t2.small"
+  else
+    MASTER_SIZE="t2.medium"
+  fi
+fi
+
 
 # Because regions are globally named, we want to create in a single region; default to us-east-1
 AWS_S3_REGION=${AWS_S3_REGION:-us-east-1}
@@ -112,3 +137,6 @@ KUBE_MINION_IMAGE="${KUBE_MINION_IMAGE:-}"
 COREOS_CHANNEL="${COREOS_CHANNEL:-alpha}"
 CONTAINER_RUNTIME="${KUBE_CONTAINER_RUNTIME:-docker}"
 RKT_VERSION="${KUBE_RKT_VERSION:-0.5.5}"
+
+# Optional: if set to true, kube-up will configure the cluster to run e2e tests.
+E2E_STORAGE_TEST_ENVIRONMENT=${KUBE_E2E_STORAGE_TEST_ENVIRONMENT:-false}

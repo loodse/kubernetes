@@ -45,10 +45,31 @@ var _ = Describe("[Performance Suite] Latency", func() {
 	var additionalPodsPrefix string
 	var ns string
 	var uuid string
-	framework := Framework{BaseName: "latency", NamespaceDeletionTimeout: time.Hour}
+
+	AfterEach(func() {
+		By("Removing additional pods if any")
+		for i := 1; i <= nodeCount; i++ {
+			name := additionalPodsPrefix + "-" + strconv.Itoa(i)
+			c.Pods(ns).Delete(name, nil)
+		}
+
+		By(fmt.Sprintf("Destroying namespace for this suite %v", ns))
+		if err := c.Namespaces().Delete(ns); err != nil {
+			Failf("Couldn't delete ns %s", err)
+		}
+
+		expectNoError(writePerfData(c, fmt.Sprintf(testContext.OutputDir+"/%s", uuid), "after"))
+
+		// Verify latency metrics
+		highLatencyRequests, err := HighLatencyRequests(c)
+		expectNoError(err)
+		Expect(highLatencyRequests).NotTo(BeNumerically(">", 0), "There should be no high-latency requests")
+	})
+
+	framework := NewFramework("latency")
+	framework.NamespaceDeletionTimeout = time.Hour
 
 	BeforeEach(func() {
-		framework.beforeEach()
 		c = framework.Client
 		ns = framework.Namespace.Name
 		var err error
@@ -77,27 +98,6 @@ var _ = Describe("[Performance Suite] Latency", func() {
 				}
 			}
 		}
-	})
-
-	AfterEach(func() {
-		defer framework.afterEach()
-		By("Removing additional pods if any")
-		for i := 1; i <= nodeCount; i++ {
-			name := additionalPodsPrefix + "-" + strconv.Itoa(i)
-			c.Pods(ns).Delete(name, nil)
-		}
-
-		By(fmt.Sprintf("Destroying namespace for this suite %v", ns))
-		if err := c.Namespaces().Delete(ns); err != nil {
-			Failf("Couldn't delete ns %s", err)
-		}
-
-		expectNoError(writePerfData(c, fmt.Sprintf(testContext.OutputDir+"/%s", uuid), "after"))
-
-		// Verify latency metrics
-		highLatencyRequests, err := HighLatencyRequests(c)
-		expectNoError(err)
-		Expect(highLatencyRequests).NotTo(BeNumerically(">", 0), "There should be no high-latency requests")
 	})
 
 	// Skipped to avoid running in e2e
@@ -152,8 +152,8 @@ func runLatencyTest(nodeCount int, c *client.Client, ns string) {
 			ListFunc: func() (runtime.Object, error) {
 				return c.Pods(ns).List(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything())
 			},
-			WatchFunc: func(rv string) (watch.Interface, error) {
-				return c.Pods(ns).Watch(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything(), rv)
+			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				return c.Pods(ns).Watch(labels.SelectorFromSet(labels.Set{"name": additionalPodsPrefix}), fields.Everything(), options)
 			},
 		},
 		&api.Pod{},

@@ -230,28 +230,46 @@ func TestEvents(t *testing.T) {
 	}
 }
 
+func TestWaitUntilFreshAndList(t *testing.T) {
+	store := newWatchCache(3)
+
+	// In background, update the store.
+	go func() {
+		store.Add(makeTestPod("foo", 2))
+		store.Add(makeTestPod("bar", 5))
+	}()
+
+	list, resourceVersion := store.WaitUntilFreshAndList(4)
+	if resourceVersion != 5 {
+		t.Errorf("unexpected resourceVersion: %v, expected: 5", resourceVersion)
+	}
+	if len(list) != 2 {
+		t.Errorf("unexpected list returned: %#v", list)
+	}
+}
+
 type testLW struct {
 	ListFunc  func() (runtime.Object, error)
-	WatchFunc func(resourceVersion string) (watch.Interface, error)
+	WatchFunc func(options api.ListOptions) (watch.Interface, error)
 }
 
 func (t *testLW) List() (runtime.Object, error) { return t.ListFunc() }
-func (t *testLW) Watch(resourceVersion string) (watch.Interface, error) {
-	return t.WatchFunc(resourceVersion)
+func (t *testLW) Watch(options api.ListOptions) (watch.Interface, error) {
+	return t.WatchFunc(options)
 }
 
 func TestReflectorForWatchCache(t *testing.T) {
 	store := newWatchCache(5)
 
 	{
-		_, version := store.ListWithVersion()
+		_, version := store.WaitUntilFreshAndList(0)
 		if version != 0 {
 			t.Errorf("unexpected resource version: %d", version)
 		}
 	}
 
 	lw := &testLW{
-		WatchFunc: func(rv string) (watch.Interface, error) {
+		WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
 			fw := watch.NewFake()
 			go fw.Stop()
 			return fw, nil
@@ -264,7 +282,7 @@ func TestReflectorForWatchCache(t *testing.T) {
 	r.ListAndWatch(util.NeverStop)
 
 	{
-		_, version := store.ListWithVersion()
+		_, version := store.WaitUntilFreshAndList(10)
 		if version != 10 {
 			t.Errorf("unexpected resource version: %d", version)
 		}

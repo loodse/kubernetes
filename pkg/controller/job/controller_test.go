@@ -23,12 +23,12 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/rand"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
@@ -77,7 +77,7 @@ func newPodList(count int, status api.PodPhase, job *extensions.Job) []api.Pod {
 	for i := 0; i < count; i++ {
 		newPod := api.Pod{
 			ObjectMeta: api.ObjectMeta{
-				Name:      fmt.Sprintf("pod-%v", unversioned.Now().UnixNano()),
+				Name:      fmt.Sprintf("pod-%v", rand.String(10)),
 				Labels:    job.Spec.Selector.MatchLabels,
 				Namespace: job.Namespace,
 			},
@@ -166,14 +166,7 @@ func TestControllerSyncJob(t *testing.T) {
 		manager := NewJobController(client, controller.NoResyncPeriodFunc)
 		fakePodControl := controller.FakePodControl{Err: tc.podControllerError}
 		manager.podControl = &fakePodControl
-		var job *extensions.Job
-		manager.podStoreSynced = func() bool {
-			selector, _ := extensions.PodSelectorAsSelector(job.Spec.Selector)
-			podList, _ := manager.podStore.Pods(job.Namespace).List(selector)
-			active := len(controller.FilterActivePods(podList.Items))
-			succeeded, failed := getStatus(podList.Items)
-			return active == tc.activePods && succeeded == tc.succeededPods && failed == tc.failedPods
-		}
+		manager.podStoreSynced = alwaysReady
 		var actual *extensions.Job
 		manager.updateHandler = func(job *extensions.Job) error {
 			actual = job
@@ -181,7 +174,7 @@ func TestControllerSyncJob(t *testing.T) {
 		}
 
 		// job & pods setup
-		job = newJob(tc.parallelism, tc.completions)
+		job := newJob(tc.parallelism, tc.completions)
 		manager.jobStore.Store.Add(job)
 		for _, pod := range newPodList(tc.activePods, api.PodRunning, job) {
 			manager.podStore.Store.Add(&pod)

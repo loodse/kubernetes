@@ -6,6 +6,9 @@ base:
 {% if grains.get('cloud') == 'aws' %}
     - ntp
 {% endif %}
+{% if pillar.get('e2e_storage_test_environment', '').lower() == 'true' %}
+    - e2e
+{% endif %}
 
   'roles:kubernetes-pool':
     - match: grain
@@ -30,11 +33,7 @@ base:
     - kube-registry-proxy
 {% endif %}
     - logrotate
-{% if grains['cloud'] is defined and grains.cloud == 'gce' %}
     - supervisor
-{% else %}
-    - monit
-{% endif %}
 
   'roles:kubernetes-master':
     - match: grain
@@ -43,11 +42,7 @@ base:
     - kube-apiserver
     - kube-controller-manager
     - kube-scheduler
-{% if grains['cloud'] is defined and grains.cloud == 'gce' %}
     - supervisor
-{% else %}
-    - monit
-{% endif %}
 {% if grains['cloud'] is defined and not grains.cloud in [ 'aws', 'gce', 'vagrant' ] %}
     - nginx
 {% endif %}

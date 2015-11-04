@@ -32,6 +32,7 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/client/metrics"
 	"k8s.io/kubernetes/pkg/conversion/queryparams"
 	"k8s.io/kubernetes/pkg/fields"
@@ -149,6 +150,10 @@ func (r *Request) Resource(resource string) *Request {
 		r.err = fmt.Errorf("resource already set to %q, cannot change to %q", r.resource, resource)
 		return r
 	}
+	if ok, msg := validation.IsValidPathSegmentName(resource); !ok {
+		r.err = fmt.Errorf("invalid resource %q: %s", resource, msg)
+		return r
+	}
 	r.resource = resource
 	return r
 }
@@ -163,6 +168,12 @@ func (r *Request) SubResource(subresources ...string) *Request {
 	if len(r.subresource) != 0 {
 		r.err = fmt.Errorf("subresource already set to %q, cannot change to %q", r.resource, subresource)
 		return r
+	}
+	for _, s := range subresources {
+		if ok, msg := validation.IsValidPathSegmentName(s); !ok {
+			r.err = fmt.Errorf("invalid subresource %q: %s", s, msg)
+			return r
+		}
 	}
 	r.subresource = subresource
 	return r
@@ -181,6 +192,10 @@ func (r *Request) Name(resourceName string) *Request {
 		r.err = fmt.Errorf("resource name already set to %q, cannot change to %q", r.resourceName, resourceName)
 		return r
 	}
+	if ok, msg := validation.IsValidPathSegmentName(resourceName); !ok {
+		r.err = fmt.Errorf("invalid resource name %q: %s", resourceName, msg)
+		return r
+	}
 	r.resourceName = resourceName
 	return r
 }
@@ -192,6 +207,10 @@ func (r *Request) Namespace(namespace string) *Request {
 	}
 	if r.namespaceSet {
 		r.err = fmt.Errorf("namespace already set to %q, cannot change to %q", r.namespace, namespace)
+		return r
+	}
+	if ok, msg := validation.IsValidPathSegmentName(namespace); !ok {
+		r.err = fmt.Errorf("invalid namespace %q: %s", namespace, msg)
 		return r
 	}
 	r.namespaceSet = true
@@ -322,33 +341,33 @@ func (v versionToResourceToFieldMapping) filterField(apiVersion, resourceType, f
 var fieldMappings = versionToResourceToFieldMapping{
 	"v1": resourceTypeToFieldMapping{
 		"nodes": clientFieldNameToAPIVersionFieldName{
-			ObjectNameField:   "metadata.name",
-			NodeUnschedulable: "spec.unschedulable",
+			ObjectNameField:   ObjectNameField,
+			NodeUnschedulable: NodeUnschedulable,
 		},
 		"pods": clientFieldNameToAPIVersionFieldName{
-			PodHost:   "spec.nodeName",
-			PodStatus: "status.phase",
+			PodHost:   PodHost,
+			PodStatus: PodStatus,
 		},
 		"secrets": clientFieldNameToAPIVersionFieldName{
-			SecretType: "type",
+			SecretType: SecretType,
 		},
 		"serviceAccounts": clientFieldNameToAPIVersionFieldName{
-			ObjectNameField: "metadata.name",
+			ObjectNameField: ObjectNameField,
 		},
 		"endpoints": clientFieldNameToAPIVersionFieldName{
-			ObjectNameField: "metadata.name",
+			ObjectNameField: ObjectNameField,
 		},
 		"events": clientFieldNameToAPIVersionFieldName{
-			ObjectNameField:              "metadata.name",
-			EventReason:                  "reason",
-			EventSource:                  "source",
-			EventInvolvedKind:            "involvedObject.kind",
-			EventInvolvedNamespace:       "involvedObject.namespace",
-			EventInvolvedName:            "involvedObject.name",
-			EventInvolvedUID:             "involvedObject.uid",
-			EventInvolvedAPIVersion:      "involvedObject.apiVersion",
-			EventInvolvedResourceVersion: "involvedObject.resourceVersion",
-			EventInvolvedFieldPath:       "involvedObject.fieldPath",
+			ObjectNameField:              ObjectNameField,
+			EventReason:                  EventReason,
+			EventSource:                  EventSource,
+			EventInvolvedKind:            EventInvolvedKind,
+			EventInvolvedNamespace:       EventInvolvedNamespace,
+			EventInvolvedName:            EventInvolvedName,
+			EventInvolvedUID:             EventInvolvedUID,
+			EventInvolvedAPIVersion:      EventInvolvedAPIVersion,
+			EventInvolvedResourceVersion: EventInvolvedResourceVersion,
+			EventInvolvedFieldPath:       EventInvolvedFieldPath,
 		},
 	},
 }
@@ -459,11 +478,24 @@ func (r *Request) Timeout(d time.Duration) *Request {
 	return r
 }
 
+// Timeout makes the request use the given duration as a timeout. Sets the "timeoutSeconds"
+// parameter.
+func (r *Request) TimeoutSeconds(d time.Duration) *Request {
+	if r.err != nil {
+		return r
+	}
+	if d != 0 {
+		timeout := int64(d.Seconds())
+		r.Param("timeoutSeconds", strconv.FormatInt(timeout, 10))
+	}
+	return r
+}
+
 // Body makes the request use obj as the body. Optional.
 // If obj is a string, try to read a file of that name.
 // If obj is a []byte, send it directly.
 // If obj is an io.Reader, use it directly.
-// If obj is a runtime.Object, marshal it correctly.
+// If obj is a runtime.Object, marshal it correctly, and set Content-Type header.
 // Otherwise, set an error.
 func (r *Request) Body(obj interface{}) *Request {
 	if r.err != nil {
@@ -491,6 +523,7 @@ func (r *Request) Body(obj interface{}) *Request {
 		}
 		glog.V(8).Infof("Request Body: %s", string(data))
 		r.body = bytes.NewBuffer(data)
+		r.SetHeader("Content-Type", "application/json")
 	default:
 		r.err = fmt.Errorf("unknown type used for body: %+v", obj)
 	}

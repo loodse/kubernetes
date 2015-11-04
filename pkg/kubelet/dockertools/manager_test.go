@@ -356,7 +356,7 @@ func apiContainerToContainer(c docker.APIContainers) kubecontainer.Container {
 	}
 }
 
-func dockerContainersToPod(containers DockerContainers) kubecontainer.Pod {
+func dockerContainersToPod(containers []*docker.APIContainers) kubecontainer.Pod {
 	var pod kubecontainer.Pod
 	for _, c := range containers {
 		dockerName, hash, err := ParseDockerName(c.Names[0])
@@ -544,6 +544,7 @@ func runSyncPod(t *testing.T, dm *DockerManager, fakeDocker *FakeDockerClient, p
 		t.Fatalf("unexpected error: %v", err)
 	}
 	runningPod := kubecontainer.Pods(runningPods).FindPodByID(pod.UID)
+
 	podStatus, err := dm.GetPodStatus(pod)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -710,6 +711,14 @@ func TestSyncPodDeletesWithNoPodInfraContainer(t *testing.T) {
 			// format is // k8s_<container-id>_<pod-fullname>_<pod-uid>
 			Names: []string{"/k8s_bar1_foo1_new_12345678_0"},
 			ID:    "1234",
+		},
+	}
+
+	fakeDocker.ContainerMap = map[string]*docker.Container{
+		"1234": {
+			ID:         "1234",
+			Config:     &docker.Config{},
+			HostConfig: &docker.HostConfig{},
 		},
 	}
 
@@ -963,7 +972,6 @@ func TestSyncPodsDoesNothing(t *testing.T) {
 }
 
 func TestSyncPodWithPullPolicy(t *testing.T) {
-	api.ForTesting_ReferencesAllowBlankSelfLinks = true
 	dm, fakeDocker := newTestDockerManager()
 	puller := dm.dockerPuller.(*FakeDockerPuller)
 	puller.HasImages = []string{"existing_one", "want:latest"}
@@ -1160,6 +1168,17 @@ func TestGetPodStatusWithLastTermination(t *testing.T) {
 		{Name: "failed"},
 	}
 
+	pod := &api.Pod{
+		ObjectMeta: api.ObjectMeta{
+			UID:       "12345678",
+			Name:      "foo",
+			Namespace: "new",
+		},
+		Spec: api.PodSpec{
+			Containers: containers,
+		},
+	}
+
 	exitedAPIContainers := []docker.APIContainers{
 		{
 			// format is // k8s_<container-id>_<pod-fullname>_<pod-uid>
@@ -1239,17 +1258,7 @@ func TestGetPodStatusWithLastTermination(t *testing.T) {
 		fakeDocker.ExitedContainerList = exitedAPIContainers
 		fakeDocker.ContainerMap = containerMap
 		fakeDocker.ClearCalls()
-		pod := &api.Pod{
-			ObjectMeta: api.ObjectMeta{
-				UID:       "12345678",
-				Name:      "foo",
-				Namespace: "new",
-			},
-			Spec: api.PodSpec{
-				Containers:    containers,
-				RestartPolicy: tt.policy,
-			},
-		}
+		pod.Spec.RestartPolicy = tt.policy
 		fakeDocker.ContainerList = []docker.APIContainers{
 			{
 				// pod infra container
@@ -1526,49 +1535,16 @@ func TestGetRestartCount(t *testing.T) {
 			Namespace: "new",
 		},
 		Spec: api.PodSpec{
-			Containers: containers,
+			Containers:    containers,
+			RestartPolicy: "Always",
 		},
 	}
 
-	// format is // k8s_<container-id>_<pod-fullname>_<pod-uid>
-	names := []string{"/k8s_bar." + strconv.FormatUint(kubecontainer.HashContainer(&containers[0]), 16) + "_foo_new_12345678_0"}
-	currTime := time.Now()
-	containerMap := map[string]*docker.Container{
-		"1234": {
-			ID:     "1234",
-			Name:   "bar",
-			Config: &docker.Config{},
-			State: docker.State{
-				ExitCode:   42,
-				StartedAt:  currTime.Add(-60 * time.Second),
-				FinishedAt: currTime.Add(-60 * time.Second),
-			},
-		},
-		"5678": {
-			ID:     "5678",
-			Name:   "bar",
-			Config: &docker.Config{},
-			State: docker.State{
-				ExitCode:   42,
-				StartedAt:  currTime.Add(-30 * time.Second),
-				FinishedAt: currTime.Add(-30 * time.Second),
-			},
-		},
-		"9101": {
-			ID:     "9101",
-			Name:   "bar",
-			Config: &docker.Config{},
-			State: docker.State{
-				ExitCode:   42,
-				StartedAt:  currTime.Add(30 * time.Minute),
-				FinishedAt: currTime.Add(30 * time.Minute),
-			},
-		},
-	}
-	fakeDocker.ContainerMap = containerMap
+	fakeDocker.ContainerMap = map[string]*docker.Container{}
 
 	// Helper function for verifying the restart count.
 	verifyRestartCount := func(pod *api.Pod, expectedCount int) api.PodStatus {
+		runSyncPod(t, dm, fakeDocker, pod, nil)
 		status, err := dm.GetPodStatus(pod)
 		if err != nil {
 			t.Fatalf("unexpected error %v", err)
@@ -1580,21 +1556,86 @@ func TestGetRestartCount(t *testing.T) {
 		return *status
 	}
 
-	// Container "bar" has failed twice; create two dead docker containers.
+	killOneContainer := func(pod *api.Pod) {
+		status, err := dm.GetPodStatus(pod)
+		if err != nil {
+			t.Fatalf("unexpected error %v", err)
+		}
+		containerID := kubecontainer.ParseContainerID(status.ContainerStatuses[0].ContainerID)
+		dm.KillContainerInPod(containerID, &pod.Spec.Containers[0], pod)
+	}
+	// Container "bar" starts the first time.
 	// TODO: container lists are expected to be sorted reversely by time.
 	// We should fix FakeDockerClient to sort the list before returning.
-	fakeDocker.ExitedContainerList = []docker.APIContainers{{Names: names, ID: "5678"}, {Names: names, ID: "1234"}}
+	// (randome-liu) Just partially sorted now.
+	pod.Status = verifyRestartCount(&pod, 0)
+	killOneContainer(&pod)
+
+	// Poor container "bar" has been killed, and should be restarted with restart count 1
 	pod.Status = verifyRestartCount(&pod, 1)
+	killOneContainer(&pod)
 
-	// Found a new dead container. The restart count should be incremented.
-	fakeDocker.ExitedContainerList = []docker.APIContainers{
-		{Names: names, ID: "9101"}, {Names: names, ID: "5678"}, {Names: names, ID: "1234"}}
+	// Poor container "bar" has been killed again, and should be restarted with restart count 2
 	pod.Status = verifyRestartCount(&pod, 2)
+	killOneContainer(&pod)
 
-	// All dead containers have been GC'd. The restart count should persist
-	// (i.e., remain the same).
+	// Poor container "bar" has been killed again ang again, and should be restarted with restart count 3
+	pod.Status = verifyRestartCount(&pod, 3)
+
+	// The oldest container has been garbage collected
+	exitedContainers := fakeDocker.ExitedContainerList
+	fakeDocker.ExitedContainerList = exitedContainers[:len(exitedContainers)-1]
+	pod.Status = verifyRestartCount(&pod, 3)
+
+	// The last two oldest containers have been garbage collected
+	fakeDocker.ExitedContainerList = exitedContainers[:len(exitedContainers)-2]
+	pod.Status = verifyRestartCount(&pod, 3)
+
+	// All exited containers have been garbage collected
 	fakeDocker.ExitedContainerList = []docker.APIContainers{}
-	verifyRestartCount(&pod, 2)
+	pod.Status = verifyRestartCount(&pod, 3)
+	killOneContainer(&pod)
+
+	// Poor container "bar" has been killed again ang again and again, and should be restarted with restart count 4
+	pod.Status = verifyRestartCount(&pod, 4)
+}
+
+func TestGetTerminationMessagePath(t *testing.T) {
+	dm, fakeDocker := newTestDockerManager()
+	containers := []api.Container{
+		{
+			Name: "bar",
+			TerminationMessagePath: "/dev/somepath",
+		},
+	}
+	pod := &api.Pod{
+		ObjectMeta: api.ObjectMeta{
+			UID:       "12345678",
+			Name:      "foo",
+			Namespace: "new",
+		},
+		Spec: api.PodSpec{
+			Containers: containers,
+		},
+	}
+
+	fakeDocker.ContainerMap = map[string]*docker.Container{}
+
+	runSyncPod(t, dm, fakeDocker, pod, nil)
+
+	containerList := fakeDocker.ContainerList
+	if len(containerList) != 2 {
+		// One for infra container, one for container "bar"
+		t.Fatalf("unexpected container list length %d", len(containerList))
+	}
+	inspectResult, err := dm.client.InspectContainer(containerList[0].ID)
+	if err != nil {
+		t.Fatalf("unexpected inspect error %v", err)
+	}
+	terminationMessagePath := getTerminationMessagePathFromLabel(inspectResult.Config.Labels)
+	if terminationMessagePath != containers[0].TerminationMessagePath {
+		t.Errorf("expected termination message path %s, got %s", containers[0].TerminationMessagePath, terminationMessagePath)
+	}
 }
 
 func TestSyncPodWithPodInfraCreatesContainerCallsHandler(t *testing.T) {
@@ -2057,63 +2098,5 @@ func TestGetIPCMode(t *testing.T) {
 	ipcMode = getIPCMode(pod)
 	if ipcMode != "host" {
 		t.Errorf("expected host ipc mode for pod but got %v", ipcMode)
-	}
-}
-
-func TestPodDependsOnPodIP(t *testing.T) {
-	tests := []struct {
-		name     string
-		expected bool
-		env      api.EnvVar
-	}{
-		{
-			name:     "depends on pod IP",
-			expected: true,
-			env: api.EnvVar{
-				Name: "POD_IP",
-				ValueFrom: &api.EnvVarSource{
-					FieldRef: &api.ObjectFieldSelector{
-						APIVersion: testapi.Default.Version(),
-						FieldPath:  "status.podIP",
-					},
-				},
-			},
-		},
-		{
-			name:     "literal value",
-			expected: false,
-			env: api.EnvVar{
-				Name:  "SOME_VAR",
-				Value: "foo",
-			},
-		},
-		{
-			name:     "other downward api field",
-			expected: false,
-			env: api.EnvVar{
-				Name: "POD_NAME",
-				ValueFrom: &api.EnvVarSource{
-					FieldRef: &api.ObjectFieldSelector{
-						APIVersion: testapi.Default.Version(),
-						FieldPath:  "metadata.name",
-					},
-				},
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		pod := &api.Pod{
-			Spec: api.PodSpec{
-				Containers: []api.Container{
-					{Env: []api.EnvVar{tc.env}},
-				},
-			},
-		}
-
-		result := podDependsOnPodIP(pod)
-		if e, a := tc.expected, result; e != a {
-			t.Errorf("%v: Unexpected result; expected %v, got %v", tc.name, e, a)
-		}
 	}
 }

@@ -213,6 +213,8 @@ runTests() {
   rc_container_image_field=".spec.template.spec.containers"
   port_field="(index .spec.ports 0).port"
   port_name="(index .spec.ports 0).name"
+  second_port_field="(index .spec.ports 1).port"
+  second_port_name="(index .spec.ports 1).name"
   image_field="(index .spec.containers 0).image"
   hpa_min_field=".spec.minReplicas"
   hpa_max_field=".spec.maxReplicas"
@@ -485,6 +487,10 @@ runTests() {
   kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'gcr.io/google_containers/serve_hostname:'
   # cleaning
   rm /tmp/tmp-editor.sh
+  [ "$(EDITOR=cat kubectl edit pod/valid-pod 2>&1 | grep 'Edit cancelled')" ]
+  [ "$(EDITOR=cat kubectl edit pod/valid-pod | grep 'name: valid-pod')" ]
+  [ "$(EDITOR=cat kubectl edit --windows-line-endings pod/valid-pod | file - | grep CRLF)" ]
+  [ ! "$(EDITOR=cat kubectl edit --windows-line-endings=false pod/valid-pod | file - | grep CRLF)" ]
 
   ### Overwriting an existing label is not permitted
   # Pre-condition: name is valid-pod
@@ -525,6 +531,45 @@ runTests() {
   kubectl delete -f docs/user-guide/multi-pod.yaml "${kube_flags[@]}"
   # Post-condition: no PODs are running
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+
+  ## kubectl apply should update configuration annotations only if apply is already called
+  ## 1. kubectl create doesn't set the annotation
+  # Pre-Condition: no POD is running
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command: create a pod "test-pod"
+  kubectl create -f hack/testdata/pod.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is running
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-label'
+  # Post-Condition: pod "test-pod" doesn't have configuration annotation
+  ! [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  ## 2. kubectl replace doesn't set the annotation
+  kubectl get pods test-pod -o yaml "${kube_flags[@]}" | sed 's/test-pod-label/test-pod-replaced/g' > "${KUBE_TEMP}"/test-pod-replace.yaml
+  # Command: replace the pod "test-pod"
+  kubectl replace -f "${KUBE_TEMP}"/test-pod-replace.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is replaced
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-replaced'
+  # Post-Condition: pod "test-pod" doesn't have configuration annotation
+  ! [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  ## 3. kubectl apply does set the annotation
+  # Command: apply the pod "test-pod"
+  kubectl apply -f hack/testdata/pod-apply.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is applied
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-applied'
+  # Post-Condition: pod "test-pod" has configuration annotation
+  [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration > "${KUBE_TEMP}"/annotation-configuration
+  ## 4. kubectl replace updates an existing annotation
+  kubectl get pods test-pod -o yaml "${kube_flags[@]}" | sed 's/test-pod-applied/test-pod-replaced/g' > "${KUBE_TEMP}"/test-pod-replace.yaml
+  # Command: replace the pod "test-pod"
+  kubectl replace -f "${KUBE_TEMP}"/test-pod-replace.yaml "${kube_flags[@]}"
+  # Post-Condition: pod "test-pod" is replaced
+  kube::test::get_object_assert 'pods test-pod' "{{${labels_field}.name}}" 'test-pod-replaced'
+  # Post-Condition: pod "test-pod" has configuration annotation, and it's updated (different from the annotation when it's applied)
+  [[ "$(kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration)" ]]
+  kubectl get pods test-pod -o yaml "${kube_flags[@]}" | grep kubectl.kubernetes.io/last-applied-configuration > "${KUBE_TEMP}"/annotation-configuration-replaced
+  ! [[ $(diff -q "${KUBE_TEMP}"/annotation-configuration "${KUBE_TEMP}"/annotation-configuration-replaced > /dev/null) ]]
+  # Clean up
+  rm "${KUBE_TEMP}"/test-pod-replace.yaml "${KUBE_TEMP}"/annotation-configuration "${KUBE_TEMP}"/annotation-configuration-replaced
 
   ##############
   # Namespaces #
@@ -766,8 +811,8 @@ __EOF__
   # Pre-condition: don't need
   # Command
   output_message=$(! kubectl expose nodes 127.0.0.1 2>&1 "${kube_flags[@]}")
-  # Post-condition: the error message has "invalid resource" string
-  kube::test::if_has_string "${output_message}" 'invalid resource'
+  # Post-condition: the error message has "cannot expose" string
+  kube::test::if_has_string "${output_message}" 'cannot expose'
 
   ### Try to generate a service with invalid name (exceeding maximum valid size)
   # Pre-condition: use --name flag
@@ -780,6 +825,17 @@ __EOF__
   kube::test::if_has_string "${output_message}" '\"kubernetes-serve-hostnam\" exposed'
   # Clean-up
   kubectl delete svc kubernetes-serve-hostnam "${kube_flags[@]}"
+
+  ### Expose multiport object as a new service
+  # Pre-condition: don't use --port flag
+  output_message=$(kubectl expose -f docs/admin/high-availability/etcd.yaml --selector=test=etcd 2>&1 "${kube_flags[@]}")
+  # Post-condition: expose succeeded
+  kube::test::if_has_string "${output_message}" '\"etcd-server\" exposed'
+  # Post-condition: generated service has both ports from the exposed pod
+  kube::test::get_object_assert 'service etcd-server' "{{$port_name}} {{$port_field}}" 'port-1 2380'
+  kube::test::get_object_assert 'service etcd-server' "{{$second_port_name}} {{$second_port_field}}" 'port-2 4001'
+  # Clean-up
+  kubectl delete svc etcd-server "${kube_flags[@]}"
 
   ### Delete replication controller with id
   # Pre-condition: frontend replication controller is running
@@ -910,6 +966,26 @@ __EOF__
         kube::test::get_object_assert 'rc mock2' "{{${labels_field}.status}}" 'replaced'
       fi
     fi
+    # Command: kubectl edit multiple resources
+    temp_editor="${KUBE_TEMP}/tmp-editor.sh"
+    echo -e '#!/bin/bash\nsed -i "s/status\:\ replaced/status\:\ edited/g" $@' > "${temp_editor}"
+    chmod +x "${temp_editor}"
+    EDITOR="${temp_editor}" kubectl edit "${kube_flags[@]}" -f "${file}"
+    # Post-condition: mock service (and mock2) and mock rc (and mock2) are edited
+    if [ "$has_svc" = true ]; then
+      kube::test::get_object_assert 'services mock' "{{${labels_field}.status}}" 'edited'
+      if [ "$two_svcs" = true ]; then
+        kube::test::get_object_assert 'services mock2' "{{${labels_field}.status}}" 'edited'
+      fi
+    fi
+    if [ "$has_rc" = true ]; then
+      kube::test::get_object_assert 'rc mock' "{{${labels_field}.status}}" 'edited'
+      if [ "$two_rcs" = true ]; then
+        kube::test::get_object_assert 'rc mock2' "{{${labels_field}.status}}" 'edited'
+      fi
+    fi
+    # cleaning
+    rm "${temp_editor}"
     # Command
     # We need to set --overwrite, because otherwise, if the first attempt to run "kubectl label" 
     # fails on some, but not all, of the resources, retries will fail because it tries to modify

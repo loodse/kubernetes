@@ -144,6 +144,25 @@ func TestRequestSetTwiceError(t *testing.T) {
 	}
 }
 
+func TestInvalidSegments(t *testing.T) {
+	invalidSegments := []string{".", "..", "test/segment", "test%2bsegment"}
+	setters := map[string]func(string, *Request){
+		"namespace":   func(s string, r *Request) { r.Namespace(s) },
+		"resource":    func(s string, r *Request) { r.Resource(s) },
+		"name":        func(s string, r *Request) { r.Name(s) },
+		"subresource": func(s string, r *Request) { r.SubResource(s) },
+	}
+	for _, invalidSegment := range invalidSegments {
+		for setterName, setter := range setters {
+			r := &Request{}
+			setter(invalidSegment, r)
+			if r.err == nil {
+				t.Errorf("%s: %s: expected error, got none", setterName, invalidSegment)
+			}
+		}
+	}
+}
+
 func TestRequestParam(t *testing.T) {
 	r := (&Request{}).Param("foo", "a")
 	if !reflect.DeepEqual(r.params, url.Values{"foo": []string{"a"}}) {
@@ -154,6 +173,16 @@ func TestRequestParam(t *testing.T) {
 	r.Param("bar", "2")
 	if !reflect.DeepEqual(r.params, url.Values{"foo": []string{"a"}, "bar": []string{"1", "2"}}) {
 		t.Errorf("should have set a param: %#v", r)
+	}
+}
+
+func TestTimeoutSeconds(t *testing.T) {
+	r := &Request{}
+	r.TimeoutSeconds(time.Duration(5 * time.Second))
+	if !reflect.DeepEqual(r.params, url.Values{
+		"timeoutSeconds": []string{"5"},
+	}) {
+		t.Errorf("invalid timeoutSeconds parameter: %#v", r)
 	}
 }
 
@@ -168,6 +197,25 @@ func TestRequestVersionedParams(t *testing.T) {
 		"foo":       []string{"a"},
 		"container": []string{"bar"},
 		"follow":    []string{"true"},
+	}) {
+		t.Errorf("should have set a param: %#v", r)
+	}
+}
+
+func TestRequestVersionedParamsFromListOptions(t *testing.T) {
+	r := &Request{apiVersion: "v1"}
+	r.VersionedParams(&api.ListOptions{ResourceVersion: "1"}, api.Scheme)
+	if !reflect.DeepEqual(r.params, url.Values{
+		"resourceVersion": []string{"1"},
+	}) {
+		t.Errorf("should have set a param: %#v", r)
+	}
+
+	var timeout int64 = 10
+	r.VersionedParams(&api.ListOptions{ResourceVersion: "2", TimeoutSeconds: &timeout}, api.Scheme)
+	if !reflect.DeepEqual(r.params, url.Values{
+		"resourceVersion": []string{"1", "2"},
+		"timeoutSeconds":  []string{"10"},
 	}) {
 		t.Errorf("should have set a param: %#v", r)
 	}
@@ -1034,6 +1082,9 @@ func TestUnacceptableParamNames(t *testing.T) {
 func TestBody(t *testing.T) {
 	const data = "test payload"
 
+	obj := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
+	bodyExpected, _ := testapi.Default.Codec().Encode(obj)
+
 	f, err := ioutil.TempFile("", "test_body")
 	if err != nil {
 		t.Fatalf("TempFile error: %v", err)
@@ -1044,21 +1095,37 @@ func TestBody(t *testing.T) {
 	f.Close()
 
 	c := NewOrDie(&Config{})
-	tests := []interface{}{[]byte(data), f.Name(), strings.NewReader(data)}
+	tests := []struct {
+		input    interface{}
+		expected string
+		headers  map[string]string
+	}{
+		{[]byte(data), data, nil},
+		{f.Name(), data, nil},
+		{strings.NewReader(data), data, nil},
+		{obj, string(bodyExpected), map[string]string{"Content-Type": "application/json"}},
+	}
 	for i, tt := range tests {
-		r := c.Post().Body(tt)
+		r := c.Post().Body(tt.input)
 		if r.err != nil {
 			t.Errorf("%d: r.Body(%#v) error: %v", i, tt, r.err)
 			continue
 		}
-		buf := make([]byte, len(data))
+		buf := make([]byte, len(tt.expected))
 		if _, err := r.body.Read(buf); err != nil {
 			t.Errorf("%d: r.body.Read error: %v", i, err)
 			continue
 		}
 		body := string(buf)
-		if body != data {
-			t.Errorf("%d: r.body = %q; want %q", i, body, data)
+		if body != tt.expected {
+			t.Errorf("%d: r.body = %q; want %q", i, body, tt.expected)
+		}
+		if tt.headers != nil {
+			for k, v := range tt.headers {
+				if r.headers.Get(k) != v {
+					t.Errorf("%d: r.headers[%q] = %q; want %q", i, k, v, v)
+				}
+			}
 		}
 	}
 }

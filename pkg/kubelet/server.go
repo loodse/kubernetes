@@ -44,9 +44,12 @@ import (
 	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/auth/authenticator"
 	"k8s.io/kubernetes/pkg/auth/authorizer"
+	"k8s.io/kubernetes/pkg/client/unversioned/remotecommand"
 	"k8s.io/kubernetes/pkg/healthz"
 	"k8s.io/kubernetes/pkg/httplog"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
+	"k8s.io/kubernetes/pkg/kubelet/dockertools"
+	"k8s.io/kubernetes/pkg/kubelet/portforward"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/flushwriter"
@@ -304,6 +307,9 @@ func (s *Server) InstallDebuggingHandlers() {
 	ws.Route(ws.GET("").
 		To(s.getLogs).
 		Operation("getLogs"))
+	ws.Route(ws.GET("/{logpath:*}").
+		To(s.getLogs).
+		Operation("getLogs"))
 	s.restfulCont.Add(ws)
 
 	ws = new(restful.WebService)
@@ -367,7 +373,7 @@ func (s *Server) dockerHealthCheck(req *http.Request) error {
 		return errors.New("unknown Docker version")
 	}
 	// Verify the docker version.
-	result, err := version.Compare("1.15")
+	result, err := version.Compare(dockertools.MinimumDockerAPIVersion)
 	if err != nil {
 		return err
 	}
@@ -685,6 +691,13 @@ func (s *Server) createStreams(request *restful.Request, response *restful.Respo
 		return streams[0], streams[1], streams[2], streams[3], conn, tty, true
 	}
 
+	supportedStreamProtocols := []string{remotecommand.StreamProtocolV2Name, remotecommand.StreamProtocolV1Name}
+	_, err := httpstream.Handshake(request.Request, response.ResponseWriter, supportedStreamProtocols, remotecommand.StreamProtocolV1Name)
+	// negotiated protocol isn't used server side at the moment, but could be in the future
+	if err != nil {
+		return nil, nil, nil, nil, nil, false, false
+	}
+
 	streamCh := make(chan httpstream.Stream)
 
 	upgrader := spdy.NewResponseUpgrader()
@@ -779,6 +792,15 @@ func (s *Server) getPortForward(request *restful.Request, response *restful.Resp
 // connections; i.e., multiple `curl http://localhost:8888/` requests will be
 // handled by a single invocation of ServePortForward.
 func ServePortForward(w http.ResponseWriter, req *http.Request, portForwarder PortForwarder, podName string, uid types.UID, idleTimeout time.Duration, streamCreationTimeout time.Duration) {
+	supportedPortForwardProtocols := []string{portforward.PortForwardProtocolV1Name}
+	_, err := httpstream.Handshake(req, w, supportedPortForwardProtocols, portforward.PortForwardProtocolV1Name)
+	// negotiated protocol isn't currently used server side, but could be in the future
+	if err != nil {
+		// Handshake writes the error to the client
+		util.HandleError(err)
+		return
+	}
+
 	streamChan := make(chan httpstream.Stream, 1)
 
 	glog.V(5).Infof("Upgrading port forward response")

@@ -45,6 +45,11 @@ type CacherConfig struct {
 	// An underlying storage.Versioner.
 	Versioner Versioner
 
+	// Whether to serve Lists from in-memory cache.
+	//
+	// NOTE: DO NOT SET TO TRUE IN PRODUCTION CODE!
+	ListFromCache bool
+
 	// The Cache will be caching objects of a given Type and assumes that they
 	// are all stored under ResourcePrefix directory in the underlying database.
 	Type           interface{}
@@ -99,24 +104,83 @@ type Cacher struct {
 
 	// keyFunc is used to get a key in the underyling storage for a given object.
 	keyFunc func(runtime.Object) (string, error)
+
+	// Whether to serve Lists from in-memory cache.
+	//
+	// NOTE: DO NOT SET TO TRUE IN PRODUCTION CODE!
+	ListFromCache bool
+}
+
+// StorageFactory is a function signature for producing
+// a storage.Interface from given parameters.
+type StorageFactory func(
+	storage Interface,
+	capacity int,
+	versioner Versioner,
+	objectType runtime.Object,
+	resourcePrefix string,
+	namespaceScoped bool,
+	newListFunc func() runtime.Object) Interface
+
+func NoDecoration(
+	storage Interface,
+	capacity int,
+	versioner Versioner,
+	objectType runtime.Object,
+	resourcePrefix string,
+	namespaceScoped bool,
+	newListFunc func() runtime.Object) Interface {
+	return storage
 }
 
 // Create a new Cacher responsible from service WATCH and LIST requests from its
 // internal cache and updating its cache in the background based on the given
 // configuration.
-func NewCacher(config CacherConfig) *Cacher {
+func NewCacher(
+	storage Interface,
+	capacity int,
+	versioner Versioner,
+	objectType runtime.Object,
+	resourcePrefix string,
+	namespaceScoped bool,
+	newListFunc func() runtime.Object) Interface {
+	config := CacherConfig{
+		CacheCapacity:  capacity,
+		Storage:        storage,
+		Versioner:      versioner,
+		Type:           objectType,
+		ResourcePrefix: resourcePrefix,
+		NewListFunc:    newListFunc,
+	}
+	if namespaceScoped {
+		config.KeyFunc = func(obj runtime.Object) (string, error) {
+			return NamespaceKeyFunc(resourcePrefix, obj)
+		}
+	} else {
+		config.KeyFunc = func(obj runtime.Object) (string, error) {
+			return NoNamespaceKeyFunc(resourcePrefix, obj)
+		}
+	}
+	return NewCacherFromConfig(config)
+}
+
+// Create a new Cacher responsible from service WATCH and LIST requests from its
+// internal cache and updating its cache in the background based on the given
+// configuration.
+func NewCacherFromConfig(config CacherConfig) *Cacher {
 	watchCache := newWatchCache(config.CacheCapacity)
 	listerWatcher := newCacherListerWatcher(config.Storage, config.ResourcePrefix, config.NewListFunc)
 
 	cacher := &Cacher{
-		usable:     sync.RWMutex{},
-		storage:    config.Storage,
-		watchCache: watchCache,
-		reflector:  cache.NewReflector(listerWatcher, config.Type, watchCache, 0),
-		watcherIdx: 0,
-		watchers:   make(map[int]*cacheWatcher),
-		versioner:  config.Versioner,
-		keyFunc:    config.KeyFunc,
+		usable:        sync.RWMutex{},
+		storage:       config.Storage,
+		watchCache:    watchCache,
+		reflector:     cache.NewReflector(listerWatcher, config.Type, watchCache, 0),
+		watcherIdx:    0,
+		watchers:      make(map[int]*cacheWatcher),
+		versioner:     config.Versioner,
+		keyFunc:       config.KeyFunc,
+		ListFromCache: config.ListFromCache,
 	}
 	cacher.usable.Lock()
 	// See startCaching method for why explanation on it.
@@ -219,22 +283,20 @@ func (c *Cacher) GetToList(ctx context.Context, key string, filter FilterFunc, l
 }
 
 // Implements storage.Interface.
-func (c *Cacher) List(ctx context.Context, key string, filter FilterFunc, listObj runtime.Object) error {
-	return c.storage.List(ctx, key, filter, listObj)
-}
+func (c *Cacher) List(ctx context.Context, key string, resourceVersion uint64, filter FilterFunc, listObj runtime.Object) error {
+	if !c.ListFromCache {
+		return c.storage.List(ctx, key, resourceVersion, filter, listObj)
+	}
 
-// ListFromMemory implements list operation (the same signature as List method)
-// but it serves the contents from memory.
-// Current we cannot use ListFromMemory() instead of List(), because it only
-// guarantees eventual consistency (e.g. it's possible for Get called right after
-// Create to return not-exist, before the change is propagate).
-// TODO: We may consider changing to use ListFromMemory in the future, but this
-// requires wider discussion as an "api semantic change".
-func (c *Cacher) ListFromMemory(key string, listObj runtime.Object) error {
-	// Do NOT allow Watch to start when the underlying structures are not propagated.
+	// To avoid situation when List is proceesed before the underlying
+	// watchCache is propagated for the first time, we acquire and immediately
+	// release the 'usable' lock.
+	// We don't need to hold it all the time, because watchCache is thread-safe
+	// and it would complicate already very difficult locking pattern.
 	c.usable.RLock()
-	defer c.usable.RUnlock()
+	c.usable.RUnlock()
 
+	// List elements from cache, with at least 'resourceVersion'.
 	listPtr, err := runtime.GetItemsPtr(listObj)
 	if err != nil {
 		return err
@@ -243,15 +305,15 @@ func (c *Cacher) ListFromMemory(key string, listObj runtime.Object) error {
 	if err != nil || listVal.Kind() != reflect.Slice {
 		return fmt.Errorf("need a pointer to slice, got %v", listVal.Kind())
 	}
-	filter := filterFunction(key, c.keyFunc, Everything)
+	filterFunc := filterFunction(key, c.keyFunc, filter)
 
-	objs, resourceVersion := c.watchCache.ListWithVersion()
+	objs, resourceVersion := c.watchCache.WaitUntilFreshAndList(resourceVersion)
 	for _, obj := range objs {
 		object, ok := obj.(runtime.Object)
 		if !ok {
 			return fmt.Errorf("non runtime.Object returned from storage: %v", obj)
 		}
-		if filter(object) {
+		if filterFunc(object) {
 			listVal.Set(reflect.Append(listVal, reflect.ValueOf(object).Elem()))
 		}
 	}
@@ -344,15 +406,15 @@ func newCacherListerWatcher(storage Interface, resourcePrefix string, newListFun
 // Implements cache.ListerWatcher interface.
 func (lw *cacherListerWatcher) List() (runtime.Object, error) {
 	list := lw.newListFunc()
-	if err := lw.storage.List(context.TODO(), lw.resourcePrefix, Everything, list); err != nil {
+	if err := lw.storage.List(context.TODO(), lw.resourcePrefix, 0, Everything, list); err != nil {
 		return nil, err
 	}
 	return list, nil
 }
 
 // Implements cache.ListerWatcher interface.
-func (lw *cacherListerWatcher) Watch(resourceVersion string) (watch.Interface, error) {
-	version, err := ParseWatchResourceVersion(resourceVersion, lw.resourcePrefix)
+func (lw *cacherListerWatcher) Watch(options api.ListOptions) (watch.Interface, error) {
+	version, err := ParseWatchResourceVersion(options.ResourceVersion, lw.resourcePrefix)
 	if err != nil {
 		return nil, err
 	}

@@ -39,10 +39,6 @@ type describeClient struct {
 	client.Interface
 }
 
-func init() {
-	api.ForTesting_ReferencesAllowBlankSelfLinks = true
-}
-
 func TestDescribePod(t *testing.T) {
 	fake := testclient.NewSimpleFake(&api.Pod{
 		ObjectMeta: api.ObjectMeta{
@@ -507,7 +503,7 @@ func TestDescribeDeployment(t *testing.T) {
 			Namespace: "foo",
 		},
 		Spec: extensions.DeploymentSpec{
-			Template: &api.PodTemplateSpec{},
+			Template: api.PodTemplateSpec{},
 		},
 	})
 	c := &describeClient{T: t, Namespace: "foo", Interface: fake}

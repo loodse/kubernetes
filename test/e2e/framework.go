@@ -39,6 +39,11 @@ type Framework struct {
 	Namespace                *api.Namespace
 	Client                   *client.Client
 	NamespaceDeletionTimeout time.Duration
+
+	// If set to true framework will start a goroutine monitoring resource usage of system add-ons.
+	// It will read the data every 30 seconds from all Nodes and print summary during afterEach.
+	GatherKubeSystemResourceUsageData bool
+	gatherer                          containerResourceGatherer
 }
 
 // NewFramework makes a new framework and sets up a BeforeEach/AfterEach for
@@ -75,6 +80,10 @@ func (f *Framework) beforeEach() {
 	} else {
 		Logf("Skipping waiting for service account")
 	}
+
+	if f.GatherKubeSystemResourceUsageData {
+		f.gatherer.startGatheringData(c, time.Minute)
+	}
 }
 
 // afterEach deletes the namespace, after reading its events.
@@ -100,14 +109,22 @@ func (f *Framework) afterEach() {
 		Failf("All nodes should be ready after test, %v", err)
 	}
 
-	By(fmt.Sprintf("Destroying namespace %q for this suite.", f.Namespace.Name))
+	if testContext.DeleteNamespace {
+		By(fmt.Sprintf("Destroying namespace %q for this suite.", f.Namespace.Name))
 
-	timeout := 5 * time.Minute
-	if f.NamespaceDeletionTimeout != 0 {
-		timeout = f.NamespaceDeletionTimeout
+		timeout := 5 * time.Minute
+		if f.NamespaceDeletionTimeout != 0 {
+			timeout = f.NamespaceDeletionTimeout
+		}
+		if err := deleteNS(f.Client, f.Namespace.Name, timeout); err != nil {
+			Failf("Couldn't delete ns %q: %s", f.Namespace.Name, err)
+		}
+	} else {
+		Logf("Found DeleteNamespace=false, skipping namespace deletion!")
 	}
-	if err := deleteNS(f.Client, f.Namespace.Name, timeout); err != nil {
-		Failf("Couldn't delete ns %q: %s", f.Namespace.Name, err)
+
+	if f.GatherKubeSystemResourceUsageData {
+		f.gatherer.stopAndPrintData([]int{50, 90, 99, 100})
 	}
 	// Paranoia-- prevent reuse!
 	f.Namespace = nil
@@ -135,7 +152,7 @@ func (f *Framework) WaitForAnEndpoint(serviceName string) error {
 	for {
 		// TODO: Endpoints client should take a field selector so we
 		// don't have to list everything.
-		list, err := f.Client.Endpoints(f.Namespace.Name).List(labels.Everything())
+		list, err := f.Client.Endpoints(f.Namespace.Name).List(labels.Everything(), fields.Everything())
 		if err != nil {
 			return err
 		}
@@ -153,7 +170,7 @@ func (f *Framework) WaitForAnEndpoint(serviceName string) error {
 		w, err := f.Client.Endpoints(f.Namespace.Name).Watch(
 			labels.Everything(),
 			fields.Set{"metadata.name": serviceName}.AsSelector(),
-			rv,
+			api.ListOptions{ResourceVersion: rv},
 		)
 		if err != nil {
 			return err

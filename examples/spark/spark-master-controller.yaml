@@ -1,0 +1,31 @@
+kind: ReplicationController
+apiVersion: v1
+metadata:
+  name: spark-master-controller
+spec:
+  replicas: 1
+  selector:
+    component: spark-master
+  template:
+    metadata:
+      labels:
+        component: spark-master
+    spec:
+      containers:
+        - name: spark-master
+          image: gcr.io/google_containers/spark-master:1.5.1_v1
+          ports:
+            - containerPort: 7077
+            - containerPort: 8080
+          livenessProbe:
+            exec:
+              command:
+              - /opt/spark/sbin/spark-daemon.sh
+              - status
+              - org.apache.spark.deploy.master.Master
+              - '1'
+            initialDelaySeconds: 30
+            timeoutSeconds: 1
+          resources:
+            requests:
+              cpu: 100m

@@ -111,6 +111,11 @@ func validateObject(obj runtime.Object) (errors []error) {
 			t.Namespace = api.NamespaceDefault
 		}
 		errors = expvalidation.ValidateJob(t)
+	case *extensions.Ingress:
+		if t.Namespace == "" {
+			t.Namespace = api.NamespaceDefault
+		}
+		errors = expvalidation.ValidateIngress(t)
 	case *extensions.DaemonSet:
 		if t.Namespace == "" {
 			t.Namespace = api.NamespaceDefault
@@ -218,10 +223,13 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"http-liveness": &api.Pod{},
 		},
 		"../docs/user-guide": {
-			"multi-pod":   nil,
-			"pod":         &api.Pod{},
-			"replication": &api.ReplicationController{},
-			"job":         &extensions.Job{},
+			"multi-pod":            nil,
+			"pod":                  &api.Pod{},
+			"replication":          &api.ReplicationController{},
+			"job":                  &extensions.Job{},
+			"ingress":              &extensions.Ingress{},
+			"nginx-deployment":     &extensions.Deployment{},
+			"new-nginx-deployment": &extensions.Deployment{},
 		},
 		"../docs/admin": {
 			"daemon": &extensions.DaemonSet{},
@@ -300,9 +308,13 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"wordpress":         &api.Pod{},
 		},
 		"../examples/nfs": {
-			"nfs-server-pod":     &api.Pod{},
+			"nfs-busybox-rc":     &api.ReplicationController{},
+			"nfs-server-rc":      &api.ReplicationController{},
 			"nfs-server-service": &api.Service{},
-			"nfs-web-pod":        &api.Pod{},
+			"nfs-pv":             &api.PersistentVolume{},
+			"nfs-pvc":            &api.PersistentVolumeClaim{},
+			"nfs-web-rc":         &api.ReplicationController{},
+			"nfs-web-service":    &api.Service{},
 		},
 		"../docs/user-guide/node-selection": {
 			"pod": &api.Pod{},
@@ -344,10 +356,17 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"secret":     &api.Secret{},
 		},
 		"../examples/spark": {
+			"spark-driver-controller": &api.ReplicationController{},
+			"spark-master-controller": &api.ReplicationController{},
 			"spark-master-service":    &api.Service{},
-			"spark-master":            &api.Pod{},
+			"spark-webui":             &api.Service{},
 			"spark-worker-controller": &api.ReplicationController{},
-			"spark-driver":            &api.Pod{},
+		},
+		"../examples/spark/spark-gluster": {
+			"spark-master-service":    &api.Service{},
+			"spark-master-controller": &api.ReplicationController{},
+			"spark-worker-controller": &api.ReplicationController{},
+			"glusterfs-endpoints":     &api.Endpoints{},
 		},
 		"../examples/storm": {
 			"storm-nimbus-service":    &api.Service{},

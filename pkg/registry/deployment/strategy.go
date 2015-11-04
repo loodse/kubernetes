@@ -46,6 +46,8 @@ func (deploymentStrategy) NamespaceScoped() bool {
 
 // PrepareForCreate clears fields that are not allowed to be set by end users on creation.
 func (deploymentStrategy) PrepareForCreate(obj runtime.Object) {
+	deployment := obj.(*extensions.Deployment)
+	deployment.Status = extensions.DeploymentStatus{}
 }
 
 // Validate validates a new deployment.
@@ -61,6 +63,9 @@ func (deploymentStrategy) AllowCreateOnUpdate() bool {
 
 // PrepareForUpdate clears fields that are not allowed to be set by end users on update.
 func (deploymentStrategy) PrepareForUpdate(obj, old runtime.Object) {
+	newDeployment := obj.(*extensions.Deployment)
+	oldDeployment := old.(*extensions.Deployment)
+	newDeployment.Status = oldDeployment.Status
 }
 
 // ValidateUpdate is the default update validation for an end user.
@@ -72,11 +77,27 @@ func (deploymentStrategy) AllowUnconditionalUpdate() bool {
 	return true
 }
 
+type deploymentStatusStrategy struct {
+	deploymentStrategy
+}
+
+var StatusStrategy = deploymentStatusStrategy{Strategy}
+
+// PrepareForUpdate clears fields that are not allowed to be set by end users on update of status
+func (deploymentStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
+	newDeployment := obj.(*extensions.Deployment)
+	oldDeployment := old.(*extensions.Deployment)
+	newDeployment.Spec = oldDeployment.Spec
+}
+
+// ValidateUpdate is the default update validation for an end user updating status
+func (deploymentStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) errs.ValidationErrorList {
+	return validation.ValidateDeploymentUpdate(old.(*extensions.Deployment), obj.(*extensions.Deployment))
+}
+
 // DeploymentToSelectableFields returns a field set that represents the object.
 func DeploymentToSelectableFields(deployment *extensions.Deployment) fields.Set {
-	return fields.Set{
-		"metadata.name": deployment.Name,
-	}
+	return generic.ObjectMetaFieldsSet(deployment.ObjectMeta, true)
 }
 
 // MatchDeployment is the filter used by the generic etcd backend to route
